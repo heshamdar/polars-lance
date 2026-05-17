@@ -1,6 +1,6 @@
 # polars-lance
 
-Polars plugin for reading Lance datasets into Polars dataframes.
+Polars plugin for reading Lance datasets into Polars dataframes and writing Polars dataframes to Lance datasets.
 
 ## Installation
 
@@ -8,30 +8,49 @@ Polars plugin for reading Lance datasets into Polars dataframes.
 pip install polars-lance
 ```
 
-## Usage
+## Read
 
 ```python
 from polars_lance import scan_lance
 
-lf = scan_lance("data/example.lance")
+lf = scan_lance("example.lance")
 df = lf.collect()
+```
+
+## Write
+
+```python
+import polars as pl
+
+from polars_lance import write_lance
+
+df = pl.DataFrame({"id": [1, 2], "val": ["a", "b"]})
+write_lance(df, "example.lance")
+```
+
+Pass `mode` to control behavior in case the target dataset already exists. Valid values are `error` (default), `append`, and `overwrite`.
+
+```python
+write_lance(df, "example.lance", mode="append")
 ```
 
 ## Cloud storage
 
-Pass `storage_options` to access Lance datasets stored in AWS S3, Azure Blob Storage, or Google Cloud Storage.
+Pass `storage_options` to work with Lance datasets stored in AWS S3, Azure Blob Storage, or Google Cloud Storage.
 
 ```python
-from polars_lance import scan_lance
+from polars_lance import scan_lance, write_lance
 
-lf = scan_lance(
-    "s3://my-bucket/example.lance",
-    storage_options={
-        "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
-        "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-        "aws_region": "us-east-1",
-    },
-)
+uri = "s3://my-bucket/example.lance"
+storage_options = {
+    "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+    "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "aws_region": "us-east-1",
+}
+
+write_lance(df, uri, storage_options=storage_options)
+
+lf = scan_lance(uri, storage_options=storage_options)
 df = lf.collect()
 ```
 

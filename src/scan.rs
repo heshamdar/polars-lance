@@ -1,63 +1,15 @@
 use arrow::datatypes::Schema as ArrowSchema;
-use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use futures::StreamExt;
 use lance::dataset::builder::DatasetBuilder;
 use lance::dataset::scanner::{DatasetRecordBatchStream, Scanner};
 use lance::{Dataset, Error as LanceError};
-use polars::prelude::{DataFrame, Expr, IntoLazy, PolarsError, Schema, SchemaExt};
-use std::collections::HashMap;
+use polars::prelude::{DataFrame, Expr, IntoLazy, Schema, SchemaExt};
 
-use crate::arrow_bridge::{ArrowBridgeError, ArrowRecordBatchExt, ArrowSchemaExt};
+use crate::arrow::{ArrowRecordBatchExt, ArrowSchemaExt};
+use crate::err::LanceScannerError;
+use crate::io::StorageOptions;
 use crate::sync::TOKIO_RUNTIME;
-
-#[derive(Debug)]
-pub enum LanceScannerError {
-    Lance(LanceError),
-    Arrow(ArrowError),
-    Polars(PolarsError),
-}
-
-impl From<LanceError> for LanceScannerError {
-    fn from(err: LanceError) -> Self {
-        Self::Lance(err)
-    }
-}
-
-impl From<ArrowBridgeError> for LanceScannerError {
-    fn from(err: ArrowBridgeError) -> Self {
-        match err {
-            ArrowBridgeError::Arrow(err) => Self::Arrow(err),
-            ArrowBridgeError::Polars(err) => Self::Polars(err),
-        }
-    }
-}
-
-impl From<PolarsError> for LanceScannerError {
-    fn from(err: PolarsError) -> Self {
-        Self::Polars(err)
-    }
-}
-
-impl std::fmt::Display for LanceScannerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Lance(err) => err.fmt(f),
-            Self::Arrow(err) => err.fmt(f),
-            Self::Polars(err) => err.fmt(f),
-        }
-    }
-}
-
-impl std::error::Error for LanceScannerError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Lance(err) => Some(err),
-            Self::Arrow(err) => Some(err),
-            Self::Polars(err) => Some(err),
-        }
-    }
-}
 
 #[derive(Clone, Default)]
 pub struct LanceScannerOptions {
@@ -65,7 +17,7 @@ pub struct LanceScannerOptions {
     pub predicate: Option<Expr>,
     pub n_rows: Option<usize>,
     pub batch_size: Option<usize>,
-    pub storage_options: Option<HashMap<String, String>>,
+    pub storage_options: StorageOptions,
 }
 
 pub struct LanceScanner {
@@ -95,7 +47,7 @@ impl LanceScanner {
             return Ok(None);
         };
 
-        let mut df = DataFrame::from(batch.to_polars_record_batch()?);
+        let mut df = DataFrame::from(batch.to_polars_arrow_record_batch()?);
 
         // TODO: Translate the Polars `Expr` into a `LanceFilter` and push the predicate
         // down into the Lance scanner.
@@ -112,7 +64,7 @@ impl LanceScanner {
 
     pub fn schema_for_uri(
         uri: &str,
-        storage_options: Option<HashMap<String, String>>,
+        storage_options: StorageOptions,
     ) -> Result<Schema, LanceScannerError> {
         let dataset = Self::open_dataset(uri, storage_options)?;
         let lance_schema = dataset.schema();
@@ -121,17 +73,11 @@ impl LanceScanner {
         Ok(Schema::from_arrow_schema(&polars_arrow_schema))
     }
 
-    fn open_dataset(
-        uri: &str,
-        storage_options: Option<HashMap<String, String>>,
-    ) -> Result<Dataset, LanceError> {
+    fn open_dataset(uri: &str, storage_options: StorageOptions) -> Result<Dataset, LanceError> {
         TOKIO_RUNTIME.block_on(Self::build_lance_dataset_builder(uri, storage_options).load())
     }
 
-    fn build_lance_dataset_builder(
-        uri: &str,
-        storage_options: Option<HashMap<String, String>>,
-    ) -> DatasetBuilder {
+    fn build_lance_dataset_builder(uri: &str, storage_options: StorageOptions) -> DatasetBuilder {
         let mut builder = DatasetBuilder::from_uri(uri);
         if let Some(storage_options) = storage_options {
             builder = builder.with_storage_options(storage_options);

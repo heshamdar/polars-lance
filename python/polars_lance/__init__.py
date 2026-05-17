@@ -1,12 +1,13 @@
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Literal
 
 import polars as pl
 from polars.io.plugins import register_io_source
 
 from polars_lance import _polars_lance
 
-__all__ = ["scan_lance"]
+__all__ = ["scan_lance", "write_lance"]
 
 
 def scan_lance(
@@ -40,4 +41,19 @@ def scan_lance(
             uri=source_str,
             storage_options=storage_options,
         ),
+    )
+
+
+def write_lance(
+    df: pl.DataFrame,
+    target: str | Path,
+    *,
+    mode: Literal["error", "append", "overwrite"] = "error",
+    storage_options: dict[str, str] | None = None,
+) -> None:
+    _polars_lance.write_lance(
+        df,
+        target=str(target),
+        mode=mode,
+        storage_options=storage_options,
     )
