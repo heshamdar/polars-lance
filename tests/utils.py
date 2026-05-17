@@ -3,6 +3,8 @@ from decimal import Decimal
 
 import polars as pl
 import pyarrow as pa
+from testcontainers.azurite import AzuriteContainer
+from testcontainers.minio import MinioContainer
 
 # we exclude some types because they are currently not supported by Lance and/or Polars
 # all data types: https://arrow.apache.org/docs/python/api/datatypes.html
@@ -137,3 +139,33 @@ def to_polars_arrow(
         lf = lf.head(n_rows)
 
     return lf.collect().to_arrow()
+
+
+def s3_storage_options(minio_container: MinioContainer) -> dict[str, str]:
+    config = minio_container.get_config()
+    return {
+        "aws_endpoint": f"http://{config['endpoint']}",
+        "aws_access_key_id": config["access_key"],
+        "aws_secret_access_key": config["secret_key"],
+        # Including the region is not strictly necessary, but it makes requests
+        # much faster.
+        "aws_region": "us-east-1",
+        "aws_allow_http": "true",
+    }
+
+
+def az_storage_options(azurite_container: AzuriteContainer) -> dict[str, str]:
+    conn_str = azurite_container.get_connection_string()
+    endpoint = next(
+        v
+        for p in conn_str.split(";")
+        if "=" in p
+        for k, v in [p.split("=", 1)]
+        if k == "BlobEndpoint"
+    )
+    return {
+        "azure_endpoint": endpoint,
+        "azure_storage_account_name": azurite_container.account_name,
+        "azure_storage_account_key": azurite_container.account_key,
+        "azure_allow_http": "true",
+    }

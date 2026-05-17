@@ -3,9 +3,15 @@ from pathlib import Path
 import lance
 import polars as pl
 import pytest
+from testcontainers.azurite import AzuriteContainer
+from testcontainers.minio import MinioContainer
 
 from polars_lance import write_lance
-from tests.utils import SUPPORTED_DATA_TYPES_ARROW_TABLE
+from tests.utils import (
+    SUPPORTED_DATA_TYPES_ARROW_TABLE,
+    az_storage_options,
+    s3_storage_options,
+)
 
 
 def test_write_lance_data_types(tmp_path: Path) -> None:
@@ -72,3 +78,31 @@ def test_write_lance_overwrite_mode(tmp_path: Path) -> None:
 
     ds = lance.dataset(dataset_path)
     assert pl.DataFrame(ds.to_table()).equals(second)
+
+
+@pytest.mark.needs_docker
+def test_write_lance_s3_storage_options(minio: tuple[MinioContainer, str]) -> None:
+    minio_container, bucket_name = minio
+    df = pl.DataFrame({"id": [1, 2, 3], "value": ["a", "b", "c"]})
+    uri = f"s3://{bucket_name}/my_dataset.lance"
+    storage_options = s3_storage_options(minio_container)
+
+    write_lance(df, target=uri, storage_options=storage_options)
+
+    ds = lance.dataset(uri, storage_options=storage_options)
+    assert pl.DataFrame(ds.to_table()).equals(df)
+
+
+@pytest.mark.needs_docker
+def test_write_lance_az_storage_options(
+    azurite: tuple[AzuriteContainer, str],
+) -> None:
+    azurite_container, container_name = azurite
+    df = pl.DataFrame({"id": [1, 2, 3], "value": ["a", "b", "c"]})
+    uri = f"az://{container_name}/my_dataset.lance"
+    storage_options = az_storage_options(azurite_container)
+
+    write_lance(df, target=uri, storage_options=storage_options)
+
+    ds = lance.dataset(uri, storage_options=storage_options)
+    assert pl.DataFrame(ds.to_table()).equals(df)

@@ -26,4 +26,5 @@ def write_lance(
     target: str,
     *,
     mode: Literal["error", "append", "overwrite"] = "error",
+    storage_options: dict[str, str] | None = None,
 ) -> None: ...

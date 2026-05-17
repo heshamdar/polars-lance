@@ -3,11 +3,13 @@ use std::sync::Arc;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatchIterator;
 use lance::dataset::{Dataset, WriteMode as LanceWriteMode, WriteParams};
+use lance::io::ObjectStoreParams;
 use polars::frame::chunk_df_for_writing;
 use polars::prelude::{CompatLevel, DataFrame, SchemaExt};
 
 use crate::arrow::{ArrowBridgeError, PolarsArrowRecordBatchExt, PolarsArrowSchemaExt};
 use crate::err::LanceWriterError;
+use crate::io::StorageOptions;
 use crate::sync::TOKIO_RUNTIME;
 
 const LANCE_ARROW_COMPAT_LEVEL: CompatLevel = CompatLevel::oldest();
@@ -37,6 +39,7 @@ pub fn write_lance_dataset(
     df: DataFrame,
     uri: &str,
     mode: PolarsLanceWriteMode,
+    storage_options: StorageOptions,
 ) -> Result<(), LanceWriterError> {
     let mut df = chunk_df_for_lance_write(df)?;
 
@@ -68,6 +71,10 @@ pub fn write_lance_dataset(
 
     let write_params = WriteParams {
         mode: mode.into(),
+        store_params: storage_options.map(|storage_options| ObjectStoreParams {
+            storage_options: Some(storage_options),
+            ..ObjectStoreParams::default()
+        }),
         ..WriteParams::default()
     };
 

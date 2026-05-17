@@ -49,5 +49,11 @@ def write_lance(
     target: str | Path,
     *,
     mode: Literal["error", "append", "overwrite"] = "error",
+    storage_options: dict[str, str] | None = None,
 ) -> None:
-    _polars_lance.write_lance(df, target=str(target), mode=mode)
+    _polars_lance.write_lance(
+        df,
+        target=str(target),
+        mode=mode,
+        storage_options=storage_options,
+    )

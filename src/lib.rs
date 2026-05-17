@@ -1,5 +1,6 @@
 mod arrow;
 mod err;
+mod io;
 mod scan;
 mod sync;
 mod write;

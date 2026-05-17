@@ -36,19 +36,21 @@ write_lance(df, "data/example.lance", mode="append")
 
 ## Cloud storage
 
-Pass `storage_options` to access Lance datasets stored in AWS S3, Azure Blob Storage, or Google Cloud Storage.
+Pass `storage_options` to work with Lance datasets stored in AWS S3, Azure Blob Storage, or Google Cloud Storage.
 
 ```python
-from polars_lance import scan_lance
+from polars_lance import scan_lance, write_lance
 
-lf = scan_lance(
-    "s3://my-bucket/example.lance",
-    storage_options={
-        "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
-        "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-        "aws_region": "us-east-1",
-    },
-)
+uri = "s3://my-bucket/example.lance"
+storage_options = {
+    "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+    "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "aws_region": "us-east-1",
+}
+
+write_lance(df, uri, storage_options=storage_options)
+
+lf = scan_lance(uri, storage_options=storage_options)
 df = lf.collect()
 ```
 

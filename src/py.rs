@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -8,6 +7,7 @@ use pyo3::wrap_pyfunction;
 use pyo3_polars::error::PyPolarsErr;
 use pyo3_polars::{PyDataFrame, PyExpr, PySchema};
 
+use crate::io::StorageOptions;
 use crate::{
     write_lance_dataset, LanceScanner, LanceScannerError, LanceScannerOptions, LanceWriterError,
     PolarsLanceWriteMode,
@@ -44,7 +44,7 @@ impl PyLanceScanner {
         predicate: Option<PyExpr>,
         n_rows: Option<usize>,
         batch_size: Option<usize>,
-        storage_options: Option<HashMap<String, String>>,
+        storage_options: StorageOptions,
     ) -> Self {
         Self(LanceScanner::new(
             uri,
@@ -67,10 +67,7 @@ impl PyLanceScanner {
 
     #[staticmethod]
     #[pyo3(signature = (uri, storage_options=None))]
-    fn schema_for_uri(
-        uri: String,
-        storage_options: Option<HashMap<String, String>>,
-    ) -> PyResult<PySchema> {
+    fn schema_for_uri(uri: String, storage_options: StorageOptions) -> PyResult<PySchema> {
         LanceScanner::schema_for_uri(&uri, storage_options)
             .map(|schema| PySchema(Arc::new(schema)))
             .map_err(PyErr::from)
@@ -78,8 +75,13 @@ impl PyLanceScanner {
 }
 
 #[pyfunction]
-#[pyo3(signature = (df, target, *, mode = "error"))]
-fn write_lance(df: PyDataFrame, target: String, mode: &str) -> PyResult<()> {
+#[pyo3(signature = (df, target, *, mode = "error", storage_options = None))]
+fn write_lance(
+    df: PyDataFrame,
+    target: String,
+    mode: &str,
+    storage_options: StorageOptions,
+) -> PyResult<()> {
     let mode = match mode {
         "error" => PolarsLanceWriteMode::Error,
         "append" => PolarsLanceWriteMode::Append,
@@ -91,7 +93,7 @@ fn write_lance(df: PyDataFrame, target: String, mode: &str) -> PyResult<()> {
         }
     };
 
-    write_lance_dataset(df.into(), &target, mode).map_err(PyErr::from)
+    write_lance_dataset(df.into(), &target, mode, storage_options).map_err(PyErr::from)
 }
 
 #[pymodule]
