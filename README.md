@@ -13,7 +13,7 @@ pip install polars-lance
 ```python
 from polars_lance import scan_lance
 
-lf = scan_lance("data/example.lance")
+lf = scan_lance("example.lance")
 df = lf.collect()
 ```
 
@@ -25,13 +25,13 @@ import polars as pl
 from polars_lance import write_lance
 
 df = pl.DataFrame({"id": [1, 2], "val": ["a", "b"]})
-write_lance(df, "data/example.lance")
+write_lance(df, "example.lance")
 ```
 
 Pass `mode` to control behavior in case the target dataset already exists. Valid values are `error` (default), `append`, and `overwrite`.
 
 ```python
-write_lance(df, "data/example.lance", mode="append")
+write_lance(df, "example.lance", mode="append")
 ```
 
 ## Cloud storage
