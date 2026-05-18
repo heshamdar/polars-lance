@@ -40,4 +40,4 @@ fmt-rust:
     cargo fmt
 
 fmt-pyth:
-    uv run ruff format
+    uv run --no-project ruff format
