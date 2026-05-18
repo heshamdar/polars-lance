@@ -15,6 +15,43 @@ def scan_lance(
     *,
     storage_options: dict[str, str] | None = None,
 ) -> pl.LazyFrame:
+    """
+    Lazily read from a Lance dataset.
+
+    Parameters
+    ----------
+    source
+        Path or URI to a Lance dataset.
+    storage_options
+        Cloud storage configuration to read remote datasets on AWS S3,
+        Azure Blob Storage, or Google Cloud Storage.
+
+        Supported keys:
+
+        * `aws <https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html>`_
+        * `azure <https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html>`_
+        * `gcp <https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html>`_
+
+    Returns
+    -------
+    LazyFrame
+
+    Examples
+    --------
+    Scan a local Lance dataset.
+
+    >>> scan_lance("example.lance")
+
+    Scan a remote Lance dataset on AWS S3.
+
+    >>> source = "s3://bucket/example.lance"
+    >>> storage_options = {
+    ...     "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+    ...     "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    ...     "aws_region": "us-east-1",
+    ... }
+    >>> scan_lance(source, storage_options=storage_options)
+    """
     source_str = str(source)
 
     def io_source(
@@ -51,6 +88,49 @@ def write_lance(
     mode: Literal["error", "append", "overwrite"] = "error",
     storage_options: dict[str, str] | None = None,
 ) -> None:
+    """
+    Write dataframe to a Lance dataset.
+
+    Parameters
+    ----------
+    df
+        Dataframe to write.
+    target
+        Path or URI to the Lance dataset.
+    mode : {'error', 'append', 'overwrite'}
+        How to behave if the target dataset already exists.
+
+        - `error`: raise an error
+        - `append`: append to the existing dataset
+        - `overwrite`: replace the existing dataset
+    storage_options
+        Cloud storage configuration to write remote datasets on AWS S3,
+        Azure Blob Storage, or Google Cloud Storage.
+
+        Supported keys:
+
+        * `aws <https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html>`_
+        * `azure <https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html>`_
+        * `gcp <https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html>`_
+
+    Examples
+    --------
+    Write a local Lance dataset.
+
+    >>> df = pl.DataFrame({"id": [1, 2], "val": ["a", "b"]})
+    >>> write_lance(df, "example.lance")
+
+    Write a remote Lance dataset on AWS S3.
+
+    >>> df = pl.DataFrame({"id": [1, 2], "val": ["a", "b"]})
+    >>> target = "s3://bucket/example.lance"
+    >>> storage_options = {
+    ...     "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+    ...     "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    ...     "aws_region": "us-east-1",
+    ... }
+    >>> write_lance(df, target, storage_options=storage_options)
+    """
     _polars_lance.write_lance(
         df,
         target=str(target),
