@@ -106,3 +106,18 @@ def test_write_lance_az_storage_options(
 
     ds = lance.dataset(uri, storage_options=storage_options)
     assert pl.DataFrame(ds.to_table()).equals(df)
+
+
+def test_write_lance_max_rows_per_file(tmp_path: Path) -> None:
+    df = pl.DataFrame({"id": [1, 2, 3, 4, 5]})
+    dataset_path = tmp_path / "test.lance"
+
+    write_lance(df, target=dataset_path, max_rows_per_file=2)
+
+    ds = lance.dataset(dataset_path)
+    data_files = [
+        data_file
+        for fragment in ds.get_fragments()
+        for data_file in fragment.data_files()
+    ]
+    assert len(data_files) == 3
