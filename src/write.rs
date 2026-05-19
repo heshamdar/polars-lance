@@ -35,7 +35,9 @@ fn chunk_df_for_lance_write(mut df: DataFrame) -> Result<DataFrame, LanceWriterE
     Ok(chunk_df_for_writing(&mut df, 512 * 512)?.into_owned())
 }
 
-fn maybe_build_object_store_params(storage_options: StorageOptions) -> Option<ObjectStoreParams> {
+fn maybe_build_object_store_params(
+    storage_options: Option<StorageOptions>,
+) -> Option<ObjectStoreParams> {
     storage_options.map(|storage_options| ObjectStoreParams {
         storage_options: Some(storage_options),
         ..ObjectStoreParams::default()
@@ -44,7 +46,7 @@ fn maybe_build_object_store_params(storage_options: StorageOptions) -> Option<Ob
 
 fn build_write_params(
     mode: PolarsLanceWriteMode,
-    storage_options: StorageOptions,
+    storage_options: Option<StorageOptions>,
     max_rows_per_file: Option<usize>,
     max_bytes_per_file: Option<usize>,
 ) -> WriteParams {
@@ -68,7 +70,7 @@ pub fn write_lance_dataset(
     df: DataFrame,
     uri: &str,
     mode: PolarsLanceWriteMode,
-    storage_options: StorageOptions,
+    storage_options: Option<StorageOptions>,
     max_rows_per_file: Option<usize>,
     max_bytes_per_file: Option<usize>,
 ) -> Result<(), LanceWriterError> {

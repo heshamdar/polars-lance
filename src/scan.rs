@@ -17,7 +17,7 @@ pub struct LanceScannerOptions {
     pub predicate: Option<Expr>,
     pub n_rows: Option<usize>,
     pub batch_size: Option<usize>,
-    pub storage_options: StorageOptions,
+    pub storage_options: Option<StorageOptions>,
 }
 
 pub struct LanceScanner {
@@ -64,7 +64,7 @@ impl LanceScanner {
 
     pub fn schema_for_uri(
         uri: &str,
-        storage_options: StorageOptions,
+        storage_options: Option<StorageOptions>,
     ) -> Result<Schema, LanceScannerError> {
         let dataset = Self::open_dataset(uri, storage_options)?;
         let lance_schema = dataset.schema();
@@ -73,11 +73,17 @@ impl LanceScanner {
         Ok(Schema::from_arrow_schema(&polars_arrow_schema))
     }
 
-    fn open_dataset(uri: &str, storage_options: StorageOptions) -> Result<Dataset, LanceError> {
+    fn open_dataset(
+        uri: &str,
+        storage_options: Option<StorageOptions>,
+    ) -> Result<Dataset, LanceError> {
         TOKIO_RUNTIME.block_on(Self::build_lance_dataset_builder(uri, storage_options).load())
     }
 
-    fn build_lance_dataset_builder(uri: &str, storage_options: StorageOptions) -> DatasetBuilder {
+    fn build_lance_dataset_builder(
+        uri: &str,
+        storage_options: Option<StorageOptions>,
+    ) -> DatasetBuilder {
         let mut builder = DatasetBuilder::from_uri(uri);
         if let Some(storage_options) = storage_options {
             builder = builder.with_storage_options(storage_options);
