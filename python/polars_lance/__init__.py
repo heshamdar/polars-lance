@@ -87,6 +87,8 @@ def write_lance(
     *,
     mode: Literal["error", "append", "overwrite"] = "error",
     storage_options: dict[str, str] | None = None,
+    max_rows_per_file: int | None = None,
+    max_bytes_per_file: int | None = None,
 ) -> None:
     """
     Write dataframe to a Lance dataset.
@@ -112,6 +114,13 @@ def write_lance(
         * `aws <https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html>`_
         * `azure <https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html>`_
         * `gcp <https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html>`_
+    max_rows_per_file
+        Maximum number of rows to write before starting a new data file.
+    max_bytes_per_file
+        Maximum number of bytes to write before starting a new data file.
+
+        This is a soft limit that is checked after a group is written, meaning that the
+        actual file size may exceed this limit.
 
     Examples
     --------
@@ -136,4 +145,6 @@ def write_lance(
         target=str(target),
         mode=mode,
         storage_options=storage_options,
+        max_rows_per_file=max_rows_per_file,
+        max_bytes_per_file=max_bytes_per_file,
     )

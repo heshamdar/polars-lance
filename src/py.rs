@@ -44,7 +44,7 @@ impl PyLanceScanner {
         predicate: Option<PyExpr>,
         n_rows: Option<usize>,
         batch_size: Option<usize>,
-        storage_options: StorageOptions,
+        storage_options: Option<StorageOptions>,
     ) -> Self {
         Self(LanceScanner::new(
             uri,
@@ -67,7 +67,7 @@ impl PyLanceScanner {
 
     #[staticmethod]
     #[pyo3(signature = (uri, storage_options=None))]
-    fn schema_for_uri(uri: String, storage_options: StorageOptions) -> PyResult<PySchema> {
+    fn schema_for_uri(uri: String, storage_options: Option<StorageOptions>) -> PyResult<PySchema> {
         LanceScanner::schema_for_uri(&uri, storage_options)
             .map(|schema| PySchema(Arc::new(schema)))
             .map_err(PyErr::from)
@@ -75,12 +75,22 @@ impl PyLanceScanner {
 }
 
 #[pyfunction]
-#[pyo3(signature = (df, target, *, mode = "error", storage_options = None))]
+#[pyo3(signature = (
+    df,
+    target,
+    *,
+    mode = "error",
+    storage_options = None,
+    max_rows_per_file = None,
+    max_bytes_per_file = None
+))]
 fn write_lance(
     df: PyDataFrame,
     target: String,
     mode: &str,
-    storage_options: StorageOptions,
+    storage_options: Option<StorageOptions>,
+    max_rows_per_file: Option<usize>,
+    max_bytes_per_file: Option<usize>,
 ) -> PyResult<()> {
     let mode = match mode {
         "error" => PolarsLanceWriteMode::Error,
@@ -93,7 +103,15 @@ fn write_lance(
         }
     };
 
-    write_lance_dataset(df.into(), &target, mode, storage_options).map_err(PyErr::from)
+    write_lance_dataset(
+        df.into(),
+        &target,
+        mode,
+        storage_options,
+        max_rows_per_file,
+        max_bytes_per_file,
+    )
+    .map_err(PyErr::from)
 }
 
 #[pymodule]
