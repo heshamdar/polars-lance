@@ -84,6 +84,8 @@ def write_lance(
     *,
     mode: Literal["error", "append", "overwrite"] = "error",
     storage_options: dict[str, str] | None = None,
+    max_rows_per_file: int | None = None,
+    max_bytes_per_file: int | None = None,
 ) -> None:
     """
     Write dataframe to a Lance dataset.
@@ -135,4 +137,6 @@ def write_lance(
         target=str(target),
         mode=mode,
         storage_options=storage_options,
+        max_rows_per_file=max_rows_per_file,
+        max_bytes_per_file=max_bytes_per_file,
     )

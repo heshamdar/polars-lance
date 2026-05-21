@@ -27,4 +27,6 @@ def write_lance(
     *,
     mode: Literal["error", "append", "overwrite"] = "error",
     storage_options: dict[str, str] | None = None,
+    max_rows_per_file: int | None = None,
+    max_bytes_per_file: int | None = None,
 ) -> None: ...
