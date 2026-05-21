@@ -193,3 +193,14 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+
+  deploy-api-reference:
+    name: Deploy API reference
+    if: ${{ inputs.publish-to == 'pypi' }}
+    needs:
+      - publish-pypi
+    uses: ./.github/workflows/api-reference.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

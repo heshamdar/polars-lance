@@ -41,3 +41,7 @@ fmt-rust:
 
 fmt-pyth:
     uv run --no-project ruff format
+
+build-docs: develop
+    rm -rf site
+    uv run pdoc -o site -d numpy polars_lance

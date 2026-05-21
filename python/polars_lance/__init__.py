@@ -24,13 +24,10 @@ def scan_lance(
         Path or URI to a Lance dataset.
     storage_options
         Cloud storage configuration to read remote datasets on AWS S3,
-        Azure Blob Storage, or Google Cloud Storage.
-
-        Supported keys:
-
-        * `aws <https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html>`_
-        * `azure <https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html>`_
-        * `gcp <https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html>`_
+        Azure Blob Storage, or Google Cloud Storage. Supported keys:
+        - [aws](https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html)
+        - [azure](https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html)
+        - [gcp](https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html)
 
     Returns
     -------
@@ -99,19 +96,21 @@ def write_lance(
         Path or URI to the Lance dataset.
     mode : {'error', 'append', 'overwrite'}
         How to behave if the target dataset already exists.
-
         - `error`: raise an error
         - `append`: append to the existing dataset
         - `overwrite`: replace the existing dataset
     storage_options
         Cloud storage configuration to write remote datasets on AWS S3,
-        Azure Blob Storage, or Google Cloud Storage.
-
-        Supported keys:
-
-        * `aws <https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html>`_
-        * `azure <https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html>`_
-        * `gcp <https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html>`_
+        Azure Blob Storage, or Google Cloud Storage. Supported keys:
+        - [aws](https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html)
+        - [azure](https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html)
+        - [gcp](https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html)
+    max_rows_per_file
+        Maximum number of rows to write before starting a new data file.
+    max_bytes_per_file
+        Maximum number of bytes to write before starting a new data file. This is a soft
+        limit that is checked after a group is written, meaning that the actual file
+        size may exceed this limit.
 
     Examples
     --------
