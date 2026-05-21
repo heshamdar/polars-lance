@@ -28,6 +28,7 @@ urls = { Repository = "https://github.com/jorritsandbrink/polars-lance" }
 [dependency-groups]
 dev = [
   "maturin>=1.13.1",
+  "pdoc>=16.0.0",
   "pylance>=4.0.1",
   "pyarrow>=14.0.0",
   "pytest>=8.0.0",
