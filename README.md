@@ -58,3 +58,7 @@ Cloud storage IO is powered by the `object_store` Rust crate. These are the supp
 - `s3://`: [AWS options](https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html)
 - `az://`: [Azure options](https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html)
 - `gs://`: [GCP options](https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html)
+
+## API reference
+
+See the [API reference](https://jorritsandbrink.github.io/polars-lance/polars_lance.html) for full function signatures and parameter details.
