@@ -25,13 +25,14 @@ from tests.utils import DEBUG_ASSERTIONS, NESTED_ARROW_TABLE
 
 WRITERS: list[Callable[..., None]] = [write_lance, sink_lance]
 
-# Lance's 2.1 encoder trips a `debug_assert!` in its repdef serializer when a list of structs
-# holds a null struct alongside an empty or null list (lance-format/lance#8032). It reproduces
-# from hand-built arrow-rs arrays with no Polars involved, and being a debug assertion it does
-# not fire in a release build, which is why the same data written through `pylance` succeeds.
-# `just develop` builds debug, so most of these tests pin version 2.0, which writes the data at
-# the cost of not recording a struct's own validity. What a release build actually does with
-# this column is covered by `test_list_of_struct_keeps_a_null_struct_at_2_1`.
+# Every version from 2.1 on trips a `debug_assert!` in Lance's repdef serializer when a list of
+# structs holds a null struct alongside an empty or null list (lance-format/lance#8032; checked at
+# 2.1, 2.2 and 2.3). It reproduces from hand-built arrow-rs arrays with no Polars involved, and
+# being a debug assertion it does not fire in a release build, which is why the same data written
+# through `pylance` succeeds. `just develop` builds debug, so most of these tests pin version 2.0,
+# the one version that writes the data — at the cost of not recording a struct's own validity.
+# What a release build does with this column is covered by
+# `test_list_of_struct_keeps_a_null_struct_at_the_default_version`.
 STORAGE_VERSION = "2.0"
 
 # A version 2.0 dataset does not record a struct's own validity, so a null struct inside a list
@@ -240,17 +241,17 @@ def test_list_of_struct_round_trip(
 # letting a Rust panic unwind through the extension on every run only adds noise.
 @pytest.mark.skipif(
     DEBUG_ASSERTIONS,
-    reason="lance#8032: writing this at 2.1 trips a debug assertion (see STORAGE_VERSION)",
+    reason="lance#8032: writing this past 2.0 trips a debug assertion (see STORAGE_VERSION)",
 )
 @pytest.mark.parametrize("write", WRITERS, ids=["write", "sink"])
-def test_list_of_struct_keeps_a_null_struct_at_2_1(
+def test_list_of_struct_keeps_a_null_struct_at_the_default_version(
     tmp_path: Path, list_of_struct_frame: pl.DataFrame, write: Callable[..., None]
 ) -> None:
     dataset_path = tmp_path / "los_21.lance"
 
     write_frame(write, list_of_struct_frame, dataset_path)
 
-    assert lance.dataset(dataset_path).data_storage_version == "2.1"
+    assert lance.dataset(dataset_path).data_storage_version == "2.2"
     lists = scan_lance(dataset_path).collect()["list_of_struct"].to_list()
     # `Series.equals` compares the values hidden underneath a null struct, which a round trip
     # does not preserve, so compare what the column reports instead.

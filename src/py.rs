@@ -12,7 +12,7 @@ use pyo3::wrap_pyfunction;
 use pyo3_polars::error::PyPolarsErr;
 use pyo3_polars::{PyDataFrame, PySchema};
 
-use crate::blob::{wrap_blob_v2_columns, BlobLayout, BlobNullability};
+use crate::blob::wrap_blob_v2_columns;
 use crate::io::StorageOptions;
 use crate::{
     arrow_schema_for_write, df_to_record_batches, resolve_data_storage_version,
@@ -113,19 +113,15 @@ struct PyDataFrameBatchReader {
     schema: SchemaRef,
     /// Batches of the dataframe read most recently, which may have several chunks.
     pending: VecDeque<RecordBatch>,
-    /// The streaming engine decides where batches begin, so a column's nulls can land in some
-    /// batches and not others, which Lance's blob encoder cannot express.
-    blob_nullability: BlobNullability,
     done: bool,
 }
 
 impl PyDataFrameBatchReader {
-    fn new(dataframes: Py<PyAny>, schema: SchemaRef, blob_columns: &[String]) -> Self {
+    fn new(dataframes: Py<PyAny>, schema: SchemaRef) -> Self {
         Self {
             dataframes,
             schema,
             pending: VecDeque::new(),
-            blob_nullability: BlobNullability::new(blob_columns),
             done: false,
         }
     }
@@ -154,7 +150,6 @@ impl PyDataFrameBatchReader {
                 continue;
             }
 
-            self.blob_nullability.check(&batch)?;
             // A reader has to hand out batches matching the schema it advertises, which also
             // means wrapping a blob v2 column in the struct that schema declares.
             self.pending
@@ -262,21 +257,12 @@ fn write_lance_stream(
 ) -> PyResult<()> {
     let mode = parse_write_mode(mode)?;
     let blob_columns = blob_columns.unwrap_or_default();
-    let (version, layout) =
-        resolve_data_storage_version(data_storage_version.as_deref(), &blob_columns)
-            .map_err(PyErr::from)?;
+    let version = resolve_data_storage_version(data_storage_version.as_deref(), &blob_columns)
+        .map_err(PyErr::from)?;
 
     let schema: DataFrame = schema.into();
-    let schema =
-        Arc::new(arrow_schema_for_write(&schema, &blob_columns, layout).map_err(PyErr::from)?);
-
-    // Only the legacy layout needs every batch to agree about nullability, so only it is
-    // guarded; the extension type records nullability per value.
-    let guarded = match layout {
-        BlobLayout::Legacy => blob_columns.as_slice(),
-        BlobLayout::V2 => &[],
-    };
-    let reader = PyDataFrameBatchReader::new(dataframes, schema, guarded);
+    let schema = Arc::new(arrow_schema_for_write(&schema, &blob_columns).map_err(PyErr::from)?);
+    let reader = PyDataFrameBatchReader::new(dataframes, schema);
 
     // The reader takes the GIL to pull each dataframe, so it cannot be held here.
     py.detach(|| {

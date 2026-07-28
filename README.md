@@ -111,25 +111,24 @@ never reads the bytes. Name the columns to store that way:
 write_lance(df, "example.lance", blob_columns=["image"])
 ```
 
-Lance describes a blob field either with Arrow field metadata or with an extension type, and a
-Polars schema carries neither, so the columns have to be named rather than travelling with the
-frame. Reading needs nothing extra: a scan asks Lance for the bytes, so the column arrives as the
-`Binary` column the schema advertises, including from a dataset written by another tool.
+Lance describes a blob field with an Arrow extension type, which a Polars schema cannot carry, so
+the columns have to be named rather than travelling with the frame. Reading needs nothing extra: a
+scan asks Lance for the bytes, so the column arrives as the `Binary` column the schema advertises,
+including from a dataset written by another tool.
 
-Blob columns are written with data storage version `2.2`, rather than the `2.1` used otherwise,
-because only `2.2` describes the column as an extension type that records each value's
-nullability. Before `2.2` the nullability is inferred from whichever rows land in a batch, so a
-null can be rewritten as an empty value — when a streamed query puts its nulls in only some
-batches, and again when fragments that disagree are later compacted
-([lance#7955](https://github.com/lance-format/lance/issues/7955)). Passing
-`data_storage_version="2.1"` or earlier selects that older layout, where a streamed write whose
-batches disagree is refused rather than written.
+This needs data storage version `2.2`, which is the default, so `blob_columns` is refused with an
+earlier one. Before `2.2` a blob column's nullability is inferred from whichever rows land in a
+batch, and a null can be rewritten as an empty value — when a streamed query puts its nulls in
+only some batches, and again when fragments that disagree are later compacted
+([lance#7955](https://github.com/lance-format/lance/issues/7955)).
 
-### Nulls in structs
+### Storage version
 
-New datasets are written with data storage version 2.1, so a null struct is still null when
-read back. Version 2.0, which Lance still writes by default, does not record the validity of
-a struct itself and returns a valid struct holding filler values instead.
+New datasets are written with data storage version 2.2, the newest version Lance calls stable,
+where Lance's own default is 2.1. Pass `data_storage_version` to choose another, bearing in mind
+what the earlier ones cannot do: 2.0 does not record the validity of a struct itself, so a null
+struct comes back as a valid struct holding filler values, and neither 2.0 nor 2.1 can store a
+blob column's nulls.
 
 ## Cloud storage
 

@@ -136,14 +136,16 @@ def write_lance(
         limit that is checked after a group is written, meaning that the actual file
         size may exceed this limit.
     data_storage_version : {'2.2', '2.1', '2.0'}
-        Lance file format version to write a new dataset with. Defaults to `2.1`, which
-        records the validity of a struct so that a null struct stays null, or to `2.2` when
-        `blob_columns` is given, because only `2.2` stores a blob column's nulls reliably.
-        Pass `2.0` to write the older format, which Lance itself still writes by default.
-        Ignored when appending, which keeps the existing dataset's version.
+        Lance file format version to write a new dataset with. Defaults to `2.2`, the newest
+        version Lance calls stable, which is ahead of its own default of `2.1`. Earlier
+        versions lose information: `2.0` does not record the validity of a struct, so a null
+        struct reads back as a struct of filler values, and neither `2.0` nor `2.1` can store
+        a blob column's nulls, so `blob_columns` is refused with them. Ignored when
+        appending, which keeps the existing dataset's version.
     blob_columns
         Names of binary columns to store out of line, so that a scan not selecting them
-        never reads the bytes. Each has to be a binary column of the frame.
+        never reads the bytes. Each has to be a binary column of the frame. Needs
+        `data_storage_version` `2.2` or later, which is the default.
 
     Examples
     --------
@@ -222,17 +224,16 @@ def sink_lance(
     chunk_size
         Number of rows per batch to request from the streaming engine.
     data_storage_version : {'2.2', '2.1', '2.0'}
-        Lance file format version to write a new dataset with. Defaults to `2.1`, which
-        records the validity of a struct so that a null struct stays null, or to `2.2` when
-        `blob_columns` is given, because only `2.2` stores a blob column's nulls reliably.
-        Pass `2.0` to write the older format, which Lance itself still writes by default.
-        Ignored when appending, which keeps the existing dataset's version.
+        Lance file format version to write a new dataset with. Defaults to `2.2`, the newest
+        version Lance calls stable, which is ahead of its own default of `2.1`. Earlier
+        versions lose information: `2.0` does not record the validity of a struct, so a null
+        struct reads back as a struct of filler values, and neither `2.0` nor `2.1` can store
+        a blob column's nulls, so `blob_columns` is refused with them. Ignored when
+        appending, which keeps the existing dataset's version.
     blob_columns
         Names of binary columns to store out of line, so that a scan not selecting them
-        never reads the bytes. Each has to be a binary column of the frame. Only at
-        `data_storage_version` `2.1` or earlier: a column whose nulls fall in some of the
-        streamed batches and not others is refused, because Lance would store those nulls
-        as empty values.
+        never reads the bytes. Each has to be a binary column of the frame. Needs
+        `data_storage_version` `2.2` or later, which is the default.
 
     Examples
     --------

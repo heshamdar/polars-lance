@@ -36,7 +36,7 @@ def test_write_lance_str_target(tmp_path: Path) -> None:
 
 
 # A null struct must stay null, rather than becoming a valid struct holding filler values.
-# That needs data storage version 2.1, which is not the Lance default.
+# That needs data storage version 2.1 or later, where Lance's own default is 2.0.
 @pytest.mark.parametrize("write", [write_lance, sink_lance], ids=["write", "sink"])
 def test_null_structs_survive_a_round_trip(
     tmp_path: Path, write: Callable[..., None]
@@ -53,7 +53,7 @@ def test_null_structs_survive_a_round_trip(
     write(df.lazy() if write is sink_lance else df, target=dataset_path)
 
     ds = lance.dataset(dataset_path)
-    assert ds.data_storage_version == "2.1"
+    assert ds.data_storage_version == "2.2"
     # The null struct, and the valid struct whose fields are null, stay distinguishable.
     assert ds.to_table().column("st").null_count == 1
     assert pl.DataFrame(ds.to_table()).equals(df)
