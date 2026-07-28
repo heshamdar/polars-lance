@@ -3,6 +3,7 @@ use arrow::record_batch::RecordBatch;
 use futures::StreamExt;
 use lance::dataset::builder::DatasetBuilder;
 use lance::dataset::scanner::{DatasetRecordBatchStream, Scanner};
+use lance::datatypes::BlobHandling;
 use lance::{Dataset, Error as LanceError};
 use polars::prelude::{DataFrame, Schema, SchemaExt};
 
@@ -111,6 +112,11 @@ impl LanceScanner {
 
     fn build_lance_scanner(&self) -> Result<Scanner, LanceError> {
         let mut scanner = self.dataset.scan();
+
+        // Without this a blob column yields a position and size rather than the bytes the
+        // dataset's schema advertises. Projection pushdown keeps the cost off queries that do
+        // not select the column.
+        scanner.blob_handling(BlobHandling::AllBinary);
 
         if let Some(columns) = self.options.with_columns.as_deref() {
             scanner.project(columns)?;

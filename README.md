@@ -102,6 +102,22 @@ and then 16M rows peaked at 383 MB and 417 MB, against 798 MB and 1354 MB when c
 first. Use `chunk_size` to ask for smaller batches, and `max_rows_per_file` to bound how
 much the writer buffers before rolling over to a new file.
 
+### Blob columns
+
+Lance can store a large binary value out of line, so a scan that does not select the column
+never reads the bytes. Name the columns to store that way:
+
+```python
+write_lance(df, "example.lance", blob_columns=["image"])
+```
+
+The marker Lance uses lives in Arrow field metadata, which a Polars schema does not carry, so
+it has to be named rather than travelling with the column. Reading needs nothing extra: a scan
+asks Lance for the bytes, so the column arrives as the `Binary` column the schema advertises.
+
+Streaming a blob column that contains nulls is not supported — Lance's encoder fails an
+internal assertion — so write such a frame with `write_lance` rather than `sink_lance`.
+
 ### Nulls in structs
 
 New datasets are written with data storage version 2.1, so a null struct is still null when

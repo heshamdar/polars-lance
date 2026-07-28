@@ -33,6 +33,7 @@ def write_lance_stream(
     max_rows_per_file: int | None = None,
     max_bytes_per_file: int | None = None,
     data_storage_version: str | None = None,
+    blob_columns: list[str] | None = None,
 ) -> None: ...
 def write_lance(
     df: pl.DataFrame,
@@ -43,4 +44,5 @@ def write_lance(
     max_rows_per_file: int | None = None,
     max_bytes_per_file: int | None = None,
     data_storage_version: str | None = None,
+    blob_columns: list[str] | None = None,
 ) -> None: ...
