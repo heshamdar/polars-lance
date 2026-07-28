@@ -101,24 +101,8 @@ def test_nested_round_trip_in_batches(
 
 
 # A slice leaves an offset on the underlying arrays, which the bridge has to account for.
-# Slices that contain the null struct hit a Lance panic while writing at version 2.1
-# (https://github.com/lance-format/lance/issues/7908).
 @pytest.mark.parametrize("write", WRITERS, ids=["write", "sink"])
-@pytest.mark.parametrize(
-    ("offset", "length"),
-    [
-        pytest.param(
-            1, 3, marks=pytest.mark.xfail(reason="lance#7908: null struct in a slice")
-        ),
-        pytest.param(
-            2, 2, marks=pytest.mark.xfail(reason="lance#7908: null struct in a slice")
-        ),
-        pytest.param(
-            3, 1, marks=pytest.mark.xfail(reason="lance#7908: null struct in a slice")
-        ),
-        (0, 4),
-    ],
-)
+@pytest.mark.parametrize(("offset", "length"), [(1, 3), (2, 2), (3, 1), (0, 4)])
 def test_sliced_nested_round_trip(
     tmp_path: Path,
     nested_frame: pl.DataFrame,

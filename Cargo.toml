@@ -12,22 +12,21 @@ crate-type = ["cdylib", "lib"]
 pyo3 = ["dep:pyo3", "dep:pyo3-polars"]
 
 [dependencies]
-arrow = { version = "56.2.0", features = ["ffi"] }
-chrono = { version = "0.4.41", features = ["serde"] }
+arrow = { version = "58.4.0", features = ["ffi"] }
 futures = "0.3"
 once_cell = "1.20"
-polars = { version = "0.53.0", default-features = false, features = ["lazy"] }
-polars-core = { version = "0.53.0", default-features = false }
-pyo3 = { version = "0.27.0", features = ["abi3-py310"], optional = true }
-pyo3-polars = { version = "0.26.0", features = ["lazy", "dtype-full"], optional = true }
+polars = { version = "0.54.4", default-features = false, features = ["lazy"] }
+polars-core = { version = "0.54.4", default-features = false }
+pyo3 = { version = "0.28.3", features = ["abi3-py310"], optional = true }
+pyo3-polars = { version = "0.27.0", features = ["lazy", "dtype-full"], optional = true }
 tokio = { version = "1.48.0", features = ["rt-multi-thread"] }
 
 # Lance's `protoc` feature fails building on Windows, and requires a preinstalled `protoc` binary instead.
 [target.'cfg(windows)'.dependencies]
-lance = { version = "0.38.2", default-features = false, features = ["aws", "azure", "gcp"] }
+lance = { version = "9.0.0", default-features = false, features = ["aws", "azure", "gcp"] }
 
 [target.'cfg(not(windows))'.dependencies]
-lance = { version = "0.38.2", default-features = false, features = ["aws", "azure", "gcp", "protoc"] }
+lance = { version = "9.0.0", default-features = false, features = ["aws", "azure", "gcp", "protoc"] }
 
 [dev-dependencies]
 rstest = "0.26.1"
