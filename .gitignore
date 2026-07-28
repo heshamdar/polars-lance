@@ -10,3 +10,6 @@ target/
 *.pyc
 
 site/
+
+# Build artifacts from `maturin build`
+dist/
