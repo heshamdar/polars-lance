@@ -29,7 +29,7 @@ urls = { Repository = "https://github.com/jorritsandbrink/polars-lance" }
 dev = [
   "maturin>=1.13.1",
   "pdoc>=16.0.0",
-  "pylance>=4.0.1",
+  "pylance>=9.0.0",
   "pyarrow>=14.0.0",
   "pytest>=8.0.0",
   "mypy>=1.20.2",
