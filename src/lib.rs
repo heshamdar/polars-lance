@@ -9,5 +9,8 @@ mod write;
 mod py;
 
 pub use err::{LanceScannerError, LanceWriterError};
-pub use scan::{LanceScanner, LanceScannerOptions};
-pub use write::{write_lance_dataset, PolarsLanceWriteMode};
+pub use scan::{LanceReader, LanceScanner, LanceScannerOptions};
+pub use write::{
+    arrow_schema_for_write, df_to_record_batches, write_lance_dataset, write_lance_dataset_from_df,
+    PolarsLanceWriteMode,
+};

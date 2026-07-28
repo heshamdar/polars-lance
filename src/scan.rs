@@ -4,7 +4,7 @@ use futures::StreamExt;
 use lance::dataset::builder::DatasetBuilder;
 use lance::dataset::scanner::{DatasetRecordBatchStream, Scanner};
 use lance::{Dataset, Error as LanceError};
-use polars::prelude::{DataFrame, Expr, IntoLazy, Schema, SchemaExt};
+use polars::prelude::{DataFrame, Schema, SchemaExt};
 
 use crate::arrow::{ArrowRecordBatchExt, ArrowSchemaExt};
 use crate::err::LanceScannerError;
@@ -14,22 +14,50 @@ use crate::sync::TOKIO_RUNTIME;
 #[derive(Clone, Default)]
 pub struct LanceScannerOptions {
     pub with_columns: Option<Vec<String>>,
-    pub predicate: Option<Expr>,
+    /// A Lance SQL filter, translated from the Polars predicate by the caller.
+    pub filter: Option<String>,
     pub n_rows: Option<usize>,
     pub batch_size: Option<usize>,
-    pub storage_options: Option<StorageOptions>,
+}
+
+/// An opened Lance dataset, used to read its schema and to create scanners for it.
+///
+/// Opening the dataset once and reusing it avoids loading its manifest again for every
+/// scan.
+pub struct LanceReader {
+    dataset: Dataset,
+}
+
+impl LanceReader {
+    pub fn open(
+        uri: &str,
+        storage_options: Option<StorageOptions>,
+    ) -> Result<Self, LanceScannerError> {
+        let dataset = LanceScanner::open_dataset(uri, storage_options)?;
+        Ok(Self { dataset })
+    }
+
+    pub fn schema(&self) -> Result<Schema, LanceScannerError> {
+        let arrow_schema = ArrowSchema::from(self.dataset.schema());
+        let polars_arrow_schema = arrow_schema.to_polars_arrow_schema()?;
+        Ok(Schema::from_arrow_schema(&polars_arrow_schema))
+    }
+
+    pub fn scanner(&self, options: LanceScannerOptions) -> LanceScanner {
+        LanceScanner::new(self.dataset.clone(), options)
+    }
 }
 
 pub struct LanceScanner {
-    uri: String,
+    dataset: Dataset,
     options: LanceScannerOptions,
     stream: Option<DatasetRecordBatchStream>,
 }
 
 impl LanceScanner {
-    pub fn new(uri: String, options: LanceScannerOptions) -> Self {
+    pub fn new(dataset: Dataset, options: LanceScannerOptions) -> Self {
         Self {
-            uri,
+            dataset,
             options,
             stream: None,
         }
@@ -47,30 +75,7 @@ impl LanceScanner {
             return Ok(None);
         };
 
-        let mut df = DataFrame::from(batch.to_polars_arrow_record_batch()?);
-
-        // TODO: Translate the Polars `Expr` into a `LanceFilter` and push the predicate
-        // down into the Lance scanner.
-        if let Some(predicate) = self.options.predicate.as_ref() {
-            df = df
-                .lazy()
-                .filter(predicate.clone())
-                ._with_eager(true)
-                .collect()?;
-        }
-
-        Ok(Some(df))
-    }
-
-    pub fn schema_for_uri(
-        uri: &str,
-        storage_options: Option<StorageOptions>,
-    ) -> Result<Schema, LanceScannerError> {
-        let dataset = Self::open_dataset(uri, storage_options)?;
-        let lance_schema = dataset.schema();
-        let arrow_schema = ArrowSchema::from(lance_schema);
-        let polars_arrow_schema = arrow_schema.to_polars_arrow_schema()?;
-        Ok(Schema::from_arrow_schema(&polars_arrow_schema))
+        Ok(Some(DataFrame::from(batch.to_polars_arrow_record_batch()?)))
     }
 
     fn open_dataset(
@@ -105,11 +110,14 @@ impl LanceScanner {
     }
 
     fn build_lance_scanner(&self) -> Result<Scanner, LanceError> {
-        let dataset = Self::open_dataset(&self.uri, self.options.storage_options.clone())?;
-        let mut scanner = dataset.scan();
+        let mut scanner = self.dataset.scan();
 
         if let Some(columns) = self.options.with_columns.as_deref() {
             scanner.project(columns)?;
+        }
+
+        if let Some(filter) = self.options.filter.as_deref() {
+            scanner.filter(filter)?;
         }
 
         if let Some(n_rows) = self.options.n_rows {
@@ -132,7 +140,6 @@ impl LanceScanner {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use arrow::array::{ArrayRef, Int32Array, StringArray};
@@ -142,7 +149,11 @@ mod tests {
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
-    use super::{LanceScanner, LanceScannerOptions, TOKIO_RUNTIME};
+    use super::{LanceReader, LanceScanner, LanceScannerOptions, TOKIO_RUNTIME};
+
+    fn new_scanner(uri: &str, options: LanceScannerOptions) -> LanceScanner {
+        LanceReader::open(uri, None).unwrap().scanner(options)
+    }
 
     struct TestDataset {
         uri: String,
@@ -192,45 +203,36 @@ mod tests {
         }
     }
 
-    #[test]
-    fn lance_scanner_new() {
-        let uri = "file://my_dataset.lance".to_owned();
+    #[rstest]
+    fn lance_reader_scanner(test_dataset: TestDataset) {
         let options = LanceScannerOptions {
-            with_columns: Some(vec!["a".to_owned(), "b".to_owned()]),
-            predicate: None,
+            with_columns: Some(vec!["my_int32_field".to_owned()]),
+            filter: Some("my_int32_field > 1".to_owned()),
             n_rows: Some(3),
             batch_size: Some(128),
-            storage_options: None,
         };
 
-        let scanner = LanceScanner::new(uri.clone(), options.clone());
+        let scanner = new_scanner(&test_dataset.uri, options.clone());
 
-        assert_eq!(scanner.uri, uri);
         assert_eq!(scanner.options.with_columns, options.with_columns);
-        assert!(scanner.options.predicate.is_none());
+        assert_eq!(scanner.options.filter, options.filter);
         assert_eq!(scanner.options.n_rows, options.n_rows);
         assert_eq!(scanner.options.batch_size, options.batch_size);
-        assert!(scanner.options.storage_options.is_none());
         assert!(scanner.stream.is_none());
     }
 
-    #[test]
-    fn lance_scanner_new_with_storage_options() {
-        let uri = "s3://my-bucket/my_dataset.lance".to_owned();
-        let storage_options = HashMap::from([
-            ("aws_access_key_id".to_owned(), "foo".to_owned()),
-            ("aws_secret_access_key".to_owned(), "bar".to_owned()),
-            ("aws_region".to_owned(), "us-east-1".to_owned()),
-        ]);
-        let options = LanceScannerOptions {
-            storage_options: Some(storage_options.clone()),
-            ..Default::default()
-        };
+    /// The dataset is opened once, so scanners for the same reader share it.
+    #[rstest]
+    fn lance_reader_scanners_share_the_dataset(test_dataset: TestDataset) {
+        let reader = LanceReader::open(&test_dataset.uri, None).unwrap();
 
-        let scanner = LanceScanner::new(uri.clone(), options);
+        let first = reader.scanner(LanceScannerOptions::default());
+        let second = reader.scanner(LanceScannerOptions::default());
 
-        assert_eq!(scanner.uri, uri);
-        assert_eq!(scanner.options.storage_options, Some(storage_options));
+        assert_eq!(
+            first.dataset.manifest().version,
+            second.dataset.manifest().version
+        );
     }
 
     #[rstest]
@@ -244,8 +246,8 @@ mod tests {
         }
 
         let batch_size = 2;
-        let mut scanner = LanceScanner::new(
-            test_dataset.uri.clone(),
+        let mut scanner = new_scanner(
+            &test_dataset.uri,
             LanceScannerOptions {
                 batch_size: Some(batch_size),
                 ..Default::default()
@@ -273,9 +275,84 @@ mod tests {
         assert_eq!(scanner.next().unwrap(), None);
     }
 
+    /// The filter must reach the Lance scanner, so that Lance reads fewer rows.
     #[rstest]
-    fn lance_scanner_schema_for_uri(test_dataset: TestDataset) {
-        let schema = LanceScanner::schema_for_uri(&test_dataset.uri, None).unwrap();
+    fn lance_scanner_pushes_filter_down(test_dataset: TestDataset) {
+        let scanner = new_scanner(
+            &test_dataset.uri,
+            LanceScannerOptions {
+                filter: Some("my_int32_field > 1".to_owned()),
+                ..Default::default()
+            },
+        );
+
+        let plan = TOKIO_RUNTIME
+            .block_on(scanner.build_lance_scanner().unwrap().explain_plan(false))
+            .unwrap();
+
+        assert!(
+            plan.contains("my_int32_field > Int32(1)"),
+            "expected the filter in the Lance plan, got: {plan}"
+        );
+    }
+
+    /// Without a filter, Lance scans everything.
+    #[rstest]
+    fn lance_scanner_without_filter(test_dataset: TestDataset) {
+        let scanner = new_scanner(&test_dataset.uri, LanceScannerOptions::default());
+
+        let plan = TOKIO_RUNTIME
+            .block_on(scanner.build_lance_scanner().unwrap().explain_plan(false))
+            .unwrap();
+
+        // Lance renders an absent filter as `--`.
+        assert!(
+            plan.contains("full_filter=--"),
+            "expected no filter in the Lance plan, got: {plan}"
+        );
+    }
+
+    /// The pushed filter reduces the rows the scanner returns.
+    #[rstest]
+    fn lance_scanner_next_returns_filtered_rows(test_dataset: TestDataset) {
+        let mut scanner = new_scanner(
+            &test_dataset.uri,
+            LanceScannerOptions {
+                filter: Some("my_int32_field > 1".to_owned()),
+                ..Default::default()
+            },
+        );
+
+        let df = scanner.next().unwrap().unwrap();
+
+        let expected_dataframe = DataFrame::new_infer_height(vec![
+            Series::new("my_int32_field".into(), [3i32]).into(),
+            Series::new("my_utf8_field".into(), ["c"]).into(),
+        ])
+        .unwrap();
+        assert_eq!(df, expected_dataframe);
+    }
+
+    /// An invalid filter is reported instead of being silently ignored.
+    #[rstest]
+    fn lance_scanner_rejects_invalid_filter(test_dataset: TestDataset) {
+        let mut scanner = new_scanner(
+            &test_dataset.uri,
+            LanceScannerOptions {
+                filter: Some("my_int32_field >> 1".to_owned()),
+                ..Default::default()
+            },
+        );
+
+        assert!(scanner.next().is_err());
+    }
+
+    #[rstest]
+    fn lance_reader_schema(test_dataset: TestDataset) {
+        let schema = LanceReader::open(&test_dataset.uri, None)
+            .unwrap()
+            .schema()
+            .unwrap();
 
         let expected_schema = Schema::from_iter([
             ("my_int32_field".into(), DataType::Int32),
