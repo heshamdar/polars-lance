@@ -9,6 +9,14 @@ from polars.io.plugins import register_io_source
 from testcontainers.azurite import AzuriteContainer
 from testcontainers.minio import MinioContainer
 
+from polars_lance import _polars_lance
+
+# Lance guards parts of its 2.1 encoder with `debug_assert!`s that a nullable nested column can
+# trip (lance-format/lance#8032, #8033). A release build skips them and writes the same data
+# correctly, so what these tests can cover depends on how the extension was compiled: `just
+# develop` builds debug, released wheels are release builds.
+DEBUG_ASSERTIONS: bool = _polars_lance._debug_assertions
+
 # we exclude some types because they are currently not supported by Lance and/or Polars
 # all data types: https://arrow.apache.org/docs/python/api/datatypes.html
 # excluded types: month_day_nano_interval, binary_view, string_view, decimal256,

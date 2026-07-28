@@ -7,6 +7,13 @@ setup:
 develop: setup
     uv run maturin develop
 
+# Lance guards parts of its 2.1 encoder with `debug_assert!`s that a nullable nested column can
+# trip (lance-format/lance#8032, #8033). A debug build cannot write that data at all, so some
+# tests pin storage version 2.0 or skip. This builds what a released wheel is, letting those
+# tests cover the real behaviour.
+develop-release: setup
+    uv run maturin develop --release
+
 test-rust:
     cargo test
 
@@ -14,6 +21,9 @@ test: develop
     uv run pytest
 
 test-no-docker: develop
+    uv run pytest -m "not needs_docker"
+
+test-release: develop-release
     uv run pytest -m "not needs_docker"
 
 test-versions:

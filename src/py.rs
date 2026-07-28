@@ -278,6 +278,10 @@ fn write_lance_stream(
 
 #[pymodule]
 fn _polars_lance(m: &Bound<PyModule>) -> PyResult<()> {
+    // Lance guards parts of its 2.1 encoder with `debug_assert!`s that a nullable nested column
+    // can trip (lance-format/lance#8032, #8033). They vanish in a release build, so which data
+    // this extension can write depends on how it was compiled, and the tests need to know.
+    m.add("_debug_assertions", cfg!(debug_assertions))?;
     m.add_class::<PyLanceReader>()?;
     m.add_class::<PyLanceScanner>()?;
     m.add_function(wrap_pyfunction!(write_lance, m)?)?;

@@ -21,17 +21,22 @@ import polars as pl
 import pytest
 
 from polars_lance import scan_lance, sink_lance, write_lance
-from tests.utils import NESTED_ARROW_TABLE
+from tests.utils import DEBUG_ASSERTIONS, NESTED_ARROW_TABLE
 
 WRITERS: list[Callable[..., None]] = [write_lance, sink_lance]
 
-# Lance's 2.1 encoder cannot write a list of structs that holds a null struct through this
-# crate: it trips an assertion inside `lance-encoding` (reproduced with the Lance crate 0.38
-# and 9.0). The same data written through `pylance` succeeds, so this one is specific to the
-# arrays our bridge hands `Dataset::write`, in a way that has not been isolated. Version 2.0
-# writes it, at the cost of not recording a struct's own validity, so these tests pin the
-# combination that works.
+# Lance's 2.1 encoder trips a `debug_assert!` in its repdef serializer when a list of structs
+# holds a null struct alongside an empty or null list (lance-format/lance#8032). It reproduces
+# from hand-built arrow-rs arrays with no Polars involved, and being a debug assertion it does
+# not fire in a release build, which is why the same data written through `pylance` succeeds.
+# `just develop` builds debug, so most of these tests pin version 2.0, which writes the data at
+# the cost of not recording a struct's own validity. What a release build actually does with
+# this column is covered by `test_list_of_struct_keeps_a_null_struct_at_2_1`.
 STORAGE_VERSION = "2.0"
+
+# A version 2.0 dataset does not record a struct's own validity, so a null struct inside a list
+# reads back as a struct of filler values.
+FILLER_STRUCT = {"x": 0, "name": ""}
 
 
 def write_frame(
@@ -45,8 +50,9 @@ def write_frame(
 def nested_frame() -> pl.DataFrame:
     """Nested columns that round trip exactly, at the default storage version.
 
-    `list_of_struct` is excluded: it needs version 2.0 (see `STORAGE_VERSION`), which in turn
-    cannot keep a struct's own validity, so the two cannot be exercised together.
+    `list_of_struct` is excluded: the test build pins it to version 2.0 (see
+    `STORAGE_VERSION`), which in turn cannot keep a struct's own validity, so the two cannot be
+    exercised together.
     """
     frame = pl.from_arrow(NESTED_ARROW_TABLE)
     assert isinstance(frame, pl.DataFrame)
@@ -201,8 +207,8 @@ def test_nested_projection(nested_dataset: Path, columns: list[str]) -> None:
     assert scanned.equals(stored.select(columns))
 
 
-# `list_of_struct` needs version 2.0, so it gets its own tests. Filters are compared against
-# the stored data, which is what a reader of the dataset sees.
+# `list_of_struct` is pinned to version 2.0 here, so it gets its own tests. Filters are
+# compared against the stored data, which is what a reader of the dataset sees.
 @pytest.mark.parametrize("write", WRITERS, ids=["write", "sink"])
 def test_list_of_struct_round_trip(
     tmp_path: Path, list_of_struct_frame: pl.DataFrame, write: Callable[..., None]
@@ -223,8 +229,33 @@ def test_list_of_struct_round_trip(
     assert lists[0] == [{"x": 1, "name": "a"}, {"x": 2, "name": "b"}]
     assert lists[1] == []  # empty list
     assert lists[2] is None  # null list
+    assert lists[3][0] == FILLER_STRUCT  # the null struct that 2.0 cannot record
     assert lists[3][1] == {"x": 4, "name": None}  # null field inside a struct
     assert lists[4][0] == {"x": None, "name": "e"}
+
+
+# What a released wheel does with this column, which the version 2.0 tests above cannot show:
+# at the default version a null struct inside a list stays null. Skipped rather than xfailed
+# because in a debug build there is nothing to check - the write cannot happen at all - and
+# letting a Rust panic unwind through the extension on every run only adds noise.
+@pytest.mark.skipif(
+    DEBUG_ASSERTIONS,
+    reason="lance#8032: writing this at 2.1 trips a debug assertion (see STORAGE_VERSION)",
+)
+@pytest.mark.parametrize("write", WRITERS, ids=["write", "sink"])
+def test_list_of_struct_keeps_a_null_struct_at_2_1(
+    tmp_path: Path, list_of_struct_frame: pl.DataFrame, write: Callable[..., None]
+) -> None:
+    dataset_path = tmp_path / "los_21.lance"
+
+    write_frame(write, list_of_struct_frame, dataset_path)
+
+    assert lance.dataset(dataset_path).data_storage_version == "2.1"
+    lists = scan_lance(dataset_path).collect()["list_of_struct"].to_list()
+    # `Series.equals` compares the values hidden underneath a null struct, which a round trip
+    # does not preserve, so compare what the column reports instead.
+    assert lists == list_of_struct_frame["list_of_struct"].to_list()
+    assert lists[3][0] is None  # null struct, where 2.0 gives `FILLER_STRUCT`
 
 
 @pytest.mark.parametrize(

@@ -139,3 +139,31 @@ jobs:
           else
             just test-no-docker
           fi
+
+  # Lance guards parts of its 2.1 encoder with `debug_assert!`s that a nullable nested column can
+  # trip (lance-format/lance#8032, #8033). The jobs above build debug, so they cannot exercise
+  # that data; this one builds what a released wheel is, where those tests run for real.
+  test-python-release:
+    name: Python tests (release build)
+    needs: test-rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - name: Run Python tests against a release build
+        run: just test-release
