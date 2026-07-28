@@ -8,6 +8,7 @@ use lance::{Dataset, Error as LanceError};
 use polars::prelude::{DataFrame, Schema, SchemaExt};
 
 use crate::arrow::{ArrowRecordBatchExt, ArrowSchemaExt};
+use crate::blob::{unwrap_blob_v2_batch, unwrap_blob_v2_fields};
 use crate::err::LanceScannerError;
 use crate::io::StorageOptions;
 use crate::sync::TOKIO_RUNTIME;
@@ -39,7 +40,9 @@ impl LanceReader {
     }
 
     pub fn schema(&self) -> Result<Schema, LanceScannerError> {
-        let arrow_schema = ArrowSchema::from(self.dataset.schema());
+        // A blob v2 column is described by an extension type that Polars cannot represent, and
+        // that a scan does not return anyway: asking for the bytes yields plain binary.
+        let arrow_schema = unwrap_blob_v2_fields(ArrowSchema::from(self.dataset.schema()));
         let polars_arrow_schema = arrow_schema.to_polars_arrow_schema()?;
         Ok(Schema::from_arrow_schema(&polars_arrow_schema))
     }
@@ -76,6 +79,7 @@ impl LanceScanner {
             return Ok(None);
         };
 
+        let batch = unwrap_blob_v2_batch(batch).map_err(LanceScannerError::Arrow)?;
         Ok(Some(DataFrame::from(batch.to_polars_arrow_record_batch()?)))
     }
 

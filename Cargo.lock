@@ -5067,6 +5067,7 @@ dependencies = [
  "arrow",
  "futures",
  "lance",
+ "lance-file",
  "once_cell",
  "polars",
  "polars-core",

@@ -135,11 +135,12 @@ def write_lance(
         Maximum number of bytes to write before starting a new data file. This is a soft
         limit that is checked after a group is written, meaning that the actual file
         size may exceed this limit.
-    data_storage_version : {'2.1', '2.0'}
+    data_storage_version : {'2.2', '2.1', '2.0'}
         Lance file format version to write a new dataset with. Defaults to `2.1`, which
-        records the validity of a struct so that a null struct stays null. Pass `2.0` to
-        write the older format, which Lance itself still writes by default. Ignored when
-        appending, which keeps the existing dataset's version.
+        records the validity of a struct so that a null struct stays null, or to `2.2` when
+        `blob_columns` is given, because only `2.2` stores a blob column's nulls reliably.
+        Pass `2.0` to write the older format, which Lance itself still writes by default.
+        Ignored when appending, which keeps the existing dataset's version.
     blob_columns
         Names of binary columns to store out of line, so that a scan not selecting them
         never reads the bytes. Each has to be a binary column of the frame.
@@ -220,17 +221,18 @@ def sink_lance(
         size may exceed this limit.
     chunk_size
         Number of rows per batch to request from the streaming engine.
-    data_storage_version : {'2.1', '2.0'}
+    data_storage_version : {'2.2', '2.1', '2.0'}
         Lance file format version to write a new dataset with. Defaults to `2.1`, which
-        records the validity of a struct so that a null struct stays null. Pass `2.0` to
-        write the older format, which Lance itself still writes by default. Ignored when
-        appending, which keeps the existing dataset's version.
+        records the validity of a struct so that a null struct stays null, or to `2.2` when
+        `blob_columns` is given, because only `2.2` stores a blob column's nulls reliably.
+        Pass `2.0` to write the older format, which Lance itself still writes by default.
+        Ignored when appending, which keeps the existing dataset's version.
     blob_columns
         Names of binary columns to store out of line, so that a scan not selecting them
-        never reads the bytes. Each has to be a binary column of the frame. A column whose
-        nulls fall in only some of the streamed batches is refused, because Lance would
-        store those nulls as empty values; use `write_lance`, or a `chunk_size` large
-        enough to keep the column's nulls in one batch.
+        never reads the bytes. Each has to be a binary column of the frame. Only at
+        `data_storage_version` `2.1` or earlier: a column whose nulls fall in some of the
+        streamed batches and not others is refused, because Lance would store those nulls
+        as empty values.
 
     Examples
     --------

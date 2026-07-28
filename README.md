@@ -111,16 +111,19 @@ never reads the bytes. Name the columns to store that way:
 write_lance(df, "example.lance", blob_columns=["image"])
 ```
 
-The marker Lance uses lives in Arrow field metadata, which a Polars schema does not carry, so
-it has to be named rather than travelling with the column. Reading needs nothing extra: a scan
-asks Lance for the bytes, so the column arrives as the `Binary` column the schema advertises.
+Lance describes a blob field either with Arrow field metadata or with an extension type, and a
+Polars schema carries neither, so the columns have to be named rather than travelling with the
+frame. Reading needs nothing extra: a scan asks Lance for the bytes, so the column arrives as the
+`Binary` column the schema advertises, including from a dataset written by another tool.
 
-Lance encodes a blob column's nullability from the data in each batch rather than from the
-column, and assumes every batch agrees
-([lance#8033](https://github.com/lance-format/lance/issues/8033)). A streamed query whose nulls
-fall in only some batches would store those nulls as empty values, so that write is refused with
-an error instead. Either collect the frame and use `write_lance`, or pass a `chunk_size` large
-enough to keep the column's nulls in one batch.
+Blob columns are written with data storage version `2.2`, rather than the `2.1` used otherwise,
+because only `2.2` describes the column as an extension type that records each value's
+nullability. Before `2.2` the nullability is inferred from whichever rows land in a batch, so a
+null can be rewritten as an empty value — when a streamed query puts its nulls in only some
+batches, and again when fragments that disagree are later compacted
+([lance#7955](https://github.com/lance-format/lance/issues/7955)). Passing
+`data_storage_version="2.1"` or earlier selects that older layout, where a streamed write whose
+batches disagree is refused rather than written.
 
 ### Nulls in structs
 

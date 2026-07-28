@@ -12,12 +12,12 @@ use pyo3::wrap_pyfunction;
 use pyo3_polars::error::PyPolarsErr;
 use pyo3_polars::{PyDataFrame, PySchema};
 
-use crate::blob::BlobNullability;
+use crate::blob::{wrap_blob_v2_columns, BlobLayout, BlobNullability};
 use crate::io::StorageOptions;
 use crate::{
-    arrow_schema_for_write, df_to_record_batches, write_lance_dataset, write_lance_dataset_from_df,
-    LanceReader, LanceScanner, LanceScannerError, LanceScannerOptions, LanceWriterError,
-    PolarsLanceWriteMode,
+    arrow_schema_for_write, df_to_record_batches, resolve_data_storage_version,
+    write_lance_dataset, write_lance_dataset_from_df, LanceReader, LanceScanner, LanceScannerError,
+    LanceScannerOptions, LanceWriterError, PolarsLanceWriteMode,
 };
 
 impl From<LanceScannerError> for PyErr {
@@ -154,12 +154,11 @@ impl PyDataFrameBatchReader {
                 continue;
             }
 
-            // A reader has to hand out batches matching the schema it advertises. A batch
-            // built from one morsel can describe a column as non-nullable just because that
-            // morsel holds no nulls, which Lance rejects when the dataset says otherwise.
-            let batch = RecordBatch::try_new(self.schema.clone(), batch.columns().to_vec())?;
             self.blob_nullability.check(&batch)?;
-            self.pending.push_back(batch);
+            // A reader has to hand out batches matching the schema it advertises, which also
+            // means wrapping a blob v2 column in the struct that schema declares.
+            self.pending
+                .push_back(wrap_blob_v2_columns(&batch, &self.schema)?);
         }
 
         Ok(true)
@@ -263,9 +262,21 @@ fn write_lance_stream(
 ) -> PyResult<()> {
     let mode = parse_write_mode(mode)?;
     let blob_columns = blob_columns.unwrap_or_default();
+    let (version, layout) =
+        resolve_data_storage_version(data_storage_version.as_deref(), &blob_columns)
+            .map_err(PyErr::from)?;
+
     let schema: DataFrame = schema.into();
-    let schema = Arc::new(arrow_schema_for_write(&schema, &blob_columns).map_err(PyErr::from)?);
-    let reader = PyDataFrameBatchReader::new(dataframes, schema, &blob_columns);
+    let schema =
+        Arc::new(arrow_schema_for_write(&schema, &blob_columns, layout).map_err(PyErr::from)?);
+
+    // Only the legacy layout needs every batch to agree about nullability, so only it is
+    // guarded; the extension type records nullability per value.
+    let guarded = match layout {
+        BlobLayout::Legacy => blob_columns.as_slice(),
+        BlobLayout::V2 => &[],
+    };
+    let reader = PyDataFrameBatchReader::new(dataframes, schema, guarded);
 
     // The reader takes the GIL to pull each dataframe, so it cannot be held here.
     py.detach(|| {
@@ -276,7 +287,7 @@ fn write_lance_stream(
             storage_options,
             max_rows_per_file,
             max_bytes_per_file,
-            data_storage_version.as_deref(),
+            version,
         )
     })
     .map_err(PyErr::from)
