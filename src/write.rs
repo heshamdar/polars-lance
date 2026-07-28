@@ -4,11 +4,12 @@ use arrow::datatypes::Schema as ArrowSchema;
 use arrow::error::ArrowError;
 use arrow::record_batch::{RecordBatch, RecordBatchIterator, RecordBatchReader};
 use lance::dataset::{Dataset, WriteMode as LanceWriteMode, WriteParams};
-use lance::io::ObjectStoreParams;
+use lance::io::{ObjectStoreParams, StorageOptionsAccessor};
 use polars::frame::chunk_df_for_writing;
 use polars::prelude::{CompatLevel, DataFrame, SchemaExt};
 
 use crate::arrow::{ArrowBridgeError, PolarsArrowRecordBatchExt, PolarsArrowSchemaExt};
+use crate::blob::mark_blob_columns;
 use crate::err::LanceWriterError;
 use crate::io::StorageOptions;
 use crate::sync::TOKIO_RUNTIME;
@@ -50,7 +51,10 @@ fn maybe_build_object_store_params(
     storage_options: Option<StorageOptions>,
 ) -> Option<ObjectStoreParams> {
     storage_options.map(|storage_options| ObjectStoreParams {
-        storage_options: Some(storage_options),
+        // Lance 9 reads storage options through an accessor rather than a plain map.
+        storage_options_accessor: Some(Arc::new(StorageOptionsAccessor::with_static_options(
+            storage_options,
+        ))),
         ..ObjectStoreParams::default()
     })
 }
@@ -109,11 +113,16 @@ pub fn df_to_record_batches(
 }
 
 /// The Arrow schema Lance is given for a write, derived from a dataframe's schema.
-pub fn arrow_schema_for_write(df: &DataFrame) -> Result<ArrowSchema, LanceWriterError> {
-    Ok(df
+pub fn arrow_schema_for_write(
+    df: &DataFrame,
+    blob_columns: &[String],
+) -> Result<ArrowSchema, LanceWriterError> {
+    let schema = df
         .schema()
         .to_arrow(LANCE_ARROW_COMPAT_LEVEL)
-        .to_arrow_schema()?)
+        .to_arrow_schema()?;
+
+    mark_blob_columns(schema, blob_columns).map_err(LanceWriterError::Arrow)
 }
 
 /// Write record batches to a Lance dataset as they are produced.
@@ -153,8 +162,9 @@ pub fn write_lance_dataset_from_df(
     max_rows_per_file: Option<usize>,
     max_bytes_per_file: Option<usize>,
     data_storage_version: Option<&str>,
+    blob_columns: &[String],
 ) -> Result<(), LanceWriterError> {
-    let schema = Arc::new(arrow_schema_for_write(&df)?);
+    let schema = Arc::new(arrow_schema_for_write(&df, blob_columns)?);
     let batches = df_to_record_batches(df)?;
 
     write_lance_dataset(
@@ -225,11 +235,12 @@ mod tests {
         .unwrap();
 
         assert!(matches!(write_params.mode, LanceWriteMode::Append));
+        let store_params = write_params
+            .store_params
+            .expect("store params should be set");
         assert_eq!(
-            write_params
-                .store_params
-                .expect("store params should be set")
-                .storage_options
+            store_params
+                .storage_options()
                 .expect("storage options should be set")
                 .get("aws_region"),
             Some(&"us-east-1".to_owned())
