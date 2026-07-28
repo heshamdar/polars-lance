@@ -190,7 +190,7 @@ impl ArrowArrayRefExt for ArrowArrayRef {
         let c_arrow_array = CArrowArray::new(&self.to_data());
         let polars_arrow_data_type = self.data_type().to_polars_arrow_data_type()?;
 
-        if needs_rebuild_on_read(&polars_arrow_data_type) {
+        if contains_null_dtype(&polars_arrow_data_type) {
             return self.to_polars_arrow_array_ref_without_ffi(&polars_arrow_data_type);
         }
 
@@ -214,7 +214,7 @@ trait ArrowArrayRefWithoutFfiExt: ArrowArrayRefExt {
         &self,
         dtype: &PolarsArrowDataType,
     ) -> ArrowBridgeResult<PolarsArrowArrayRef> {
-        if needs_rebuild_on_read(dtype) {
+        if contains_null_dtype(dtype) {
             self.to_polars_arrow_array_ref_without_ffi(dtype)
         } else {
             self.to_polars_arrow_array_ref()
@@ -392,12 +392,13 @@ fn compact_struct_validity(array: &dyn PolarsArrowArray) -> Box<dyn PolarsArrowA
     ))
 }
 
-/// Whether `dtype` is, or contains, the null type.
+/// Whether `dtype` is, or contains, the null type — the one shape the C data interface cannot
+/// carry, so an array of this type is rebuilt child by child instead.
 ///
 /// Polars exports a null array with one (null) buffer for compatibility with older C++
 /// implementations, while Arrow rejects any buffer for that type. A null array on its own is
-/// built directly, but one nested inside a struct or list has to be reached by rebuilding the
-/// array that holds it, because the C data interface cannot carry it.
+/// built directly; one nested inside a struct or list has to be reached by rebuilding the array
+/// that holds it.
 fn contains_null_dtype(dtype: &PolarsArrowDataType) -> bool {
     match dtype {
         PolarsArrowDataType::Null => true,
@@ -409,39 +410,6 @@ fn contains_null_dtype(dtype: &PolarsArrowDataType) -> bool {
         | PolarsArrowDataType::FixedSizeList(field, _) => contains_null_dtype(field.dtype()),
         _ => false,
     }
-}
-
-/// Whether an array of this type has to be rebuilt when reading, rather than sent through
-/// the C data interface.
-///
-/// Two shapes cannot survive the interface:
-///
-/// - Anything holding the null type, whose buffer count the two implementations disagree on.
-/// - A struct beneath a list. Polars expects the convention Arrow uses for a *sliced* struct,
-///   where the children are longer than the struct and are sliced on import, and applies it
-///   unconditionally, which drops rows when a struct inside a list carries a validity.
-fn needs_rebuild_on_read(dtype: &PolarsArrowDataType) -> bool {
-    fn holds_struct(dtype: &PolarsArrowDataType) -> bool {
-        match dtype {
-            PolarsArrowDataType::Struct(_) => true,
-            PolarsArrowDataType::List(field)
-            | PolarsArrowDataType::LargeList(field)
-            | PolarsArrowDataType::FixedSizeList(field, _) => holds_struct(field.dtype()),
-            _ => false,
-        }
-    }
-
-    let struct_beneath_list = match dtype {
-        PolarsArrowDataType::List(field)
-        | PolarsArrowDataType::LargeList(field)
-        | PolarsArrowDataType::FixedSizeList(field, _) => holds_struct(field.dtype()),
-        PolarsArrowDataType::Struct(fields) => fields
-            .iter()
-            .any(|field| needs_rebuild_on_read(field.dtype())),
-        _ => false,
-    };
-
-    contains_null_dtype(dtype) || struct_beneath_list
 }
 
 /// Convert a Polars validity bitmap into Arrow's representation.
@@ -457,7 +425,7 @@ impl PolarsArrowArrayRefExt for PolarsArrowArrayRef {
 
         // A nested null type cannot cross the C data interface, so the array holding it is
         // rebuilt from children that are converted one by one.
-        if needs_rebuild_on_read(self.dtype()) {
+        if contains_null_dtype(self.dtype()) {
             return self.to_arrow_array_ref_without_ffi();
         }
 

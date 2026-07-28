@@ -18,6 +18,7 @@ from pathlib import Path
 
 import lance
 import polars as pl
+import pyarrow as pa
 import pytest
 
 from polars_lance import scan_lance, sink_lance, write_lance
@@ -105,6 +106,41 @@ def test_nested_round_trip_in_batches(
 
     assert lance.dataset(dataset_path).count_rows() == nested_frame.height
     assert scan_lance(dataset_path).collect().equals(nested_frame)
+
+
+# The null *type* nested inside another type is the one shape the Arrow C data interface cannot
+# carry: Polars gives a null array one buffer and Arrow allows it none, so the bridge rebuilds the
+# array that holds it instead. A top-level null column takes a separate path, so it is checked
+# here too. Without this the write fails with `The datatype "Null" doesn't expect buffer at
+# index 0`.
+@pytest.mark.parametrize("write", WRITERS, ids=["write", "sink"])
+@pytest.mark.parametrize(
+    "column",
+    [
+        pytest.param(
+            pa.array(
+                [{"a": None, "b": 1}, {"a": None, "b": 2}],
+                pa.struct([("a", pa.null()), ("b", pa.int64())]),
+            ),
+            id="null_inside_a_struct",
+        ),
+        pytest.param(
+            pa.array([[None, None], [None]], pa.list_(pa.null())),
+            id="list_of_null",
+        ),
+        pytest.param(pa.array([None, None], pa.null()), id="top_level_null"),
+    ],
+)
+def test_null_type_round_trip(
+    tmp_path: Path, column: pa.Array, write: Callable[..., None]
+) -> None:
+    frame = pl.from_arrow(pa.table({"col": column}))
+    assert isinstance(frame, pl.DataFrame)
+    dataset_path = tmp_path / "null_type.lance"
+
+    write_frame(write, frame, dataset_path)
+
+    assert scan_lance(dataset_path).collect().equals(frame)
 
 
 # A slice leaves an offset on the underlying arrays, which the bridge has to account for.
@@ -257,6 +293,51 @@ def test_list_of_struct_keeps_a_null_struct_at_the_default_version(
     # does not preserve, so compare what the column reports instead.
     assert lists == list_of_struct_frame["list_of_struct"].to_list()
     assert lists[3][0] is None  # null struct, where 2.0 gives `FILLER_STRUCT`
+
+
+# A list of structs where a struct is null, but no list is empty or null, so lance#8032 does not
+# apply and it writes at the default version. That is the only way to get a struct carrying its own
+# validity *beneath a list* across the bridge, which used to drop rows. Filtered and limited scans
+# are included because they hand back sliced arrays, which is what went wrong.
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param(lambda lf: lf, id="full"),
+        pytest.param(lambda lf: lf.filter(pl.col("id") > 1), id="filtered"),
+        pytest.param(lambda lf: lf.head(2), id="limited"),
+        pytest.param(lambda lf: lf.select(["los"]), id="projected"),
+    ],
+)
+@pytest.mark.parametrize("write", WRITERS, ids=["write", "sink"])
+def test_null_struct_beneath_a_list_survives(
+    tmp_path: Path,
+    write: Callable[..., None],
+    query: Callable[[pl.LazyFrame], pl.LazyFrame],
+) -> None:
+    frame = pl.from_arrow(
+        pa.table(
+            {
+                "id": pa.array([1, 2, 3], pa.int64()),
+                "los": pa.array(
+                    [
+                        [{"x": 1, "name": "a"}, {"x": 2, "name": "b"}],
+                        [None, {"x": 4, "name": None}],
+                        [{"x": 5, "name": "e"}],
+                    ],
+                    pa.list_(pa.struct([("x", pa.int64()), ("name", pa.string())])),
+                ),
+            }
+        )
+    )
+    assert isinstance(frame, pl.DataFrame)
+    dataset_path = tmp_path / "null_struct_in_list.lance"
+
+    write_frame(write, frame, dataset_path)
+
+    scanned = query(scan_lance(dataset_path)).collect()
+    expected = query(frame.lazy()).collect()
+    assert scanned.height == expected.height
+    assert scanned["los"].to_list() == expected["los"].to_list()
 
 
 @pytest.mark.parametrize(
