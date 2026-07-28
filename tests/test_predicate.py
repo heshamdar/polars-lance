@@ -262,6 +262,86 @@ def test_untranslatable_predicates(predicate: pl.Expr) -> None:
     assert_translates_to(predicate, None)
 
 
+# A value with no SQL literal form must abort the comparison rather than be approximated:
+# rendering an infinity or a truncated nanosecond would change which rows match.
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        pytest.param(pl.col("float64") > float("inf"), id="infinity"),
+        pytest.param(pl.col("float64") < float("-inf"), id="negative_infinity"),
+        pytest.param(
+            # A nanosecond that is not a whole microsecond: a SQL timestamp literal cannot
+            # express it, and truncating would move the comparison.
+            pl.col("datetime_ns") > pl.lit(1_000_000_001, dtype=pl.Datetime("ns")),
+            id="sub_microsecond",
+        ),
+    ],
+)
+def test_values_without_a_sql_literal_are_not_translated(predicate: pl.Expr) -> None:
+    assert_translates_to(predicate, None)
+
+
+# A nanosecond literal landing exactly on a microsecond loses nothing, so it is translated.
+def test_whole_microsecond_nanosecond_literal_is_translated() -> None:
+    assert_translates_to(
+        pl.col("datetime_ns") > pl.lit(1_000_000_000, dtype=pl.Datetime("ns")),
+        "(`datetime_ns` > timestamp '1970-01-01 00:00:01.000000')",
+    )
+
+
+# `is_in` values arrive as an Arrow buffer rather than as literals, so each type is rendered by
+# its own path and needs its own check.
+@pytest.mark.parametrize(
+    ("predicate", "expected"),
+    [
+        pytest.param(
+            pl.col("bool").is_in([True, False]),
+            "(`bool` IN (true, false))",
+            id="bool",
+        ),
+        pytest.param(
+            pl.col("float64").is_in([1.5, 2.5]),
+            "(`float64` IN (1.5, 2.5))",
+            id="float",
+        ),
+        pytest.param(
+            pl.col("string").is_in(["a", "b'c"]),
+            "(`string` IN ('a', 'b''c'))",
+            id="string_with_a_quote",
+        ),
+        pytest.param(
+            pl.col("date").is_in([date(2024, 1, 1), date(2024, 1, 2)]),
+            "(`date` IN (date '2024-01-01', date '2024-01-02'))",
+            id="date",
+        ),
+        pytest.param(
+            pl.col("datetime").is_in([datetime(2024, 1, 1, 2, 3, 4)]),
+            "(`datetime` IN (timestamp '2024-01-01 02:03:04.000000'))",
+            id="datetime",
+        ),
+    ],
+)
+def test_is_in_value_types(predicate: pl.Expr, expected: str) -> None:
+    assert_translates_to(predicate, expected)
+
+
+# A value in the list that has no SQL literal form abandons the whole `IN`, because dropping
+# one value would match a subset.
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        pytest.param(pl.col("float64").is_in([1.5, float("nan")]), id="nan"),
+        pytest.param(pl.col("float64").is_in([1.5, float("inf")]), id="infinity"),
+        pytest.param(
+            pl.col("datetime_tz").is_in([datetime(2024, 1, 1, tzinfo=timezone.utc)]),
+            id="time_zone_aware",
+        ),
+    ],
+)
+def test_is_in_with_an_unrenderable_value_is_not_translated(predicate: pl.Expr) -> None:
+    assert_translates_to(predicate, None)
+
+
 # Lance does not support field names containing periods.
 def test_column_name_with_period_is_not_translated() -> None:
     assert to_lance_sql(pl.col("a.b") > 1, {"a.b": pl.Int64}) is None

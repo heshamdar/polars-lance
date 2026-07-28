@@ -62,9 +62,6 @@ def scan_lance(
         n_rows: int | None,
         batch_size: int | None,
     ) -> Iterator[pl.DataFrame]:
-        if n_rows == 0:
-            return
-
         # The translated filter only reduces the rows Lance reads; it may match a superset
         # of the predicate, so the predicate is applied to every batch below. Polars does
         # not re-apply it for IO plugins.
