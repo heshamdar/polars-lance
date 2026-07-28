@@ -172,7 +172,8 @@ def main() -> None:
         )
         print(
             "    A null struct stays null because the dataset is written with data storage\n"
-            "    version 2.1; version 2.0 turns it into a struct of filler values."
+            f"    version {lance.dataset(struct_path).data_storage_version}; version 2.0"
+            " turns it into a struct of filler values."
         )
 
         rule("6. Memory: streaming vs collecting")

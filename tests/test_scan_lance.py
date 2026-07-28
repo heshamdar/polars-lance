@@ -156,6 +156,18 @@ def test_scan_lance_slice(tmp_path: Path) -> None:
     )
 
 
+# `head(0)` reaches the plugin as `n_rows=0`, where opening a scan at all would be wasted work.
+def test_scan_lance_zero_rows(tmp_path: Path) -> None:
+    dataset_path = tmp_path / "test.lance"
+    lance.write_dataset(SUPPORTED_DATA_TYPES_ARROW_TABLE, dataset_path)
+
+    lf = scan_lance(dataset_path)
+    df = lf.head(0).collect()
+
+    assert df.height == 0
+    assert df.schema == lf.collect_schema()
+
+
 @pytest.mark.needs_docker
 def test_scan_lance_s3_storage_options(minio: tuple[MinioContainer, str]) -> None:
     minio_container, bucket_name = minio

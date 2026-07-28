@@ -285,6 +285,22 @@ mod tests {
         assert_eq!(scanner.next().unwrap(), None);
     }
 
+    /// Asking for no rows yields nothing, without opening a scan. Polars never sends this — it
+    /// resolves a zero-row limit itself — so this holds the Rust API's own behaviour, where
+    /// `Scanner::limit(0)` would otherwise decide it.
+    #[rstest]
+    fn lance_scanner_with_zero_rows(test_dataset: TestDataset) {
+        let mut scanner = new_scanner(
+            &test_dataset.uri,
+            LanceScannerOptions {
+                n_rows: Some(0),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(scanner.next().unwrap(), None);
+    }
+
     /// The filter must reach the Lance scanner, so that Lance reads fewer rows.
     #[rstest]
     fn lance_scanner_pushes_filter_down(test_dataset: TestDataset) {
