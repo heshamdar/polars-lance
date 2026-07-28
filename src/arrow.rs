@@ -3,7 +3,12 @@ use std::fmt;
 use std::mem::transmute;
 use std::sync::Arc;
 
-use arrow::array::{make_array, ArrayRef as ArrowArrayRef, NullArray as ArrowNullArray};
+use arrow::array::{
+    make_array, ArrayData as ArrowArrayData, ArrayRef as ArrowArrayRef,
+    FixedSizeListArray as ArrowFixedSizeListArray, LargeListArray as ArrowLargeListArray,
+    NullArray as ArrowNullArray, StructArray as ArrowStructArray,
+};
+use arrow::buffer::{NullBuffer as ArrowNullBuffer, OffsetBuffer as ArrowOffsetBuffer};
 use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
 use arrow::error::ArrowError;
 use arrow::ffi::{
@@ -15,10 +20,17 @@ use polars::prelude::{
     ArrowField as PolarsArrowField, ArrowSchema as PolarsArrowSchema, PolarsError,
 };
 use polars_core::utils::arrow::{
+    array::{
+        Array as PolarsArrowArray, FixedSizeListArray as PolarsArrowFixedSizeListArray,
+        ListArray as PolarsArrowListArray, NullArray as PolarsArrowNullArray,
+        StructArray as PolarsArrowStructArray,
+    },
+    bitmap::Bitmap as PolarsArrowBitmap,
     ffi::{
         export_array_to_c, export_field_to_c, import_array_from_c, import_field_from_c,
         ArrowArray as PolarsCArrowArray, ArrowSchema as PolarsCArrowSchema,
     },
+    offset::OffsetsBuffer as PolarsArrowOffsetsBuffer,
     record_batch::RecordBatch as PolarsArrowRecordBatch,
 };
 
@@ -177,11 +189,120 @@ impl ArrowArrayRefExt for ArrowArrayRef {
         // Convert from Arrow to Polars Arrow via Arrow C data interface.
         let c_arrow_array = CArrowArray::new(&self.to_data());
         let polars_arrow_data_type = self.data_type().to_polars_arrow_data_type()?;
+
+        if needs_rebuild_on_read(&polars_arrow_data_type) {
+            return self.to_polars_arrow_array_ref_without_ffi(&polars_arrow_data_type);
+        }
+
         unsafe {
             let polars_c_arrow_array = c_arrow_array.into_polars_c_arrow_array();
             import_array_from_c(polars_c_arrow_array, polars_arrow_data_type)
         }
         .map_err(Into::into)
+    }
+}
+
+trait ArrowArrayRefWithoutFfiExt: ArrowArrayRefExt {
+    /// Rebuild an array that holds a null type, whose children are converted one by one.
+    fn to_polars_arrow_array_ref_without_ffi(
+        &self,
+        dtype: &PolarsArrowDataType,
+    ) -> ArrowBridgeResult<PolarsArrowArrayRef>;
+
+    /// Convert a child, using the C data interface unless it holds a null type.
+    fn to_polars_arrow_array_ref_for(
+        &self,
+        dtype: &PolarsArrowDataType,
+    ) -> ArrowBridgeResult<PolarsArrowArrayRef> {
+        if needs_rebuild_on_read(dtype) {
+            self.to_polars_arrow_array_ref_without_ffi(dtype)
+        } else {
+            self.to_polars_arrow_array_ref()
+        }
+    }
+}
+
+impl ArrowArrayRefWithoutFfiExt for ArrowArrayRef {
+    fn to_polars_arrow_array_ref_without_ffi(
+        &self,
+        dtype: &PolarsArrowDataType,
+    ) -> ArrowBridgeResult<PolarsArrowArrayRef> {
+        let unsupported = || {
+            ArrowBridgeError::Arrow(ArrowError::NotYetImplemented(format!(
+                "converting a {:?} array holding a null type is not supported",
+                self.data_type()
+            )))
+        };
+
+        if matches!(dtype, PolarsArrowDataType::Null) {
+            return Ok(Box::new(PolarsArrowNullArray::new(
+                dtype.clone(),
+                self.len(),
+            )));
+        }
+
+        let validity = self.nulls().map(|nulls| nulls.iter().collect());
+
+        match dtype {
+            PolarsArrowDataType::Struct(fields) => {
+                let struct_array = self
+                    .as_any()
+                    .downcast_ref::<ArrowStructArray>()
+                    .ok_or_else(unsupported)?;
+
+                let values = fields
+                    .iter()
+                    .enumerate()
+                    .map(|(index, field)| {
+                        struct_array
+                            .column(index)
+                            .to_polars_arrow_array_ref_for(field.dtype())
+                    })
+                    .collect::<ArrowBridgeResult<Vec<_>>>()?;
+
+                Ok(Box::new(PolarsArrowStructArray::new(
+                    dtype.clone(),
+                    self.len(),
+                    values,
+                    validity,
+                )))
+            }
+            PolarsArrowDataType::LargeList(field) => {
+                let list_array = self
+                    .as_any()
+                    .downcast_ref::<ArrowLargeListArray>()
+                    .ok_or_else(unsupported)?;
+
+                let offsets = PolarsArrowOffsetsBuffer::try_from(
+                    list_array.offsets().iter().copied().collect::<Vec<_>>(),
+                )?;
+
+                Ok(Box::new(PolarsArrowListArray::<i64>::new(
+                    dtype.clone(),
+                    offsets,
+                    list_array
+                        .values()
+                        .to_polars_arrow_array_ref_for(field.dtype())?,
+                    validity,
+                )))
+            }
+            PolarsArrowDataType::FixedSizeList(field, _) => {
+                let list_array = self
+                    .as_any()
+                    .downcast_ref::<ArrowFixedSizeListArray>()
+                    .ok_or_else(unsupported)?;
+
+                Ok(Box::new(PolarsArrowFixedSizeListArray::new(
+                    dtype.clone(),
+                    self.len(),
+                    list_array
+                        .values()
+                        .to_polars_arrow_array_ref_for(field.dtype())?,
+                    validity,
+                )))
+            }
+            _ => Err(unsupported()),
+        }
     }
 }
 
@@ -226,20 +347,224 @@ impl PolarsArrowSchemaExt for PolarsArrowSchema {
     }
 }
 
+/// Whether a struct in `data` reports an offset that its children cannot be sliced by.
+///
+/// Slicing a struct array in Polars slices its children but leaves the validity bitmap
+/// pointing into the original buffer at an offset. Exporting that over the C data interface
+/// reports the offset on the struct even though the children are already sliced, so Arrow
+/// applies it a second time and reads past the end of a child. Polars documents the
+/// discrepancy in `polars_arrow::array::struct_::ffi`; only structs are affected.
+///
+/// This checks the condition Arrow itself asserts on, so an array is only copied to remove
+/// the offset when it would otherwise panic.
+fn struct_offset_exceeds_children(data: &ArrowArrayData) -> bool {
+    let exceeds_own_children = matches!(data.data_type(), ArrowDataType::Struct(_))
+        && data
+            .child_data()
+            .iter()
+            .any(|child| data.offset() + data.len() > child.len());
+
+    exceeds_own_children || data.child_data().iter().any(struct_offset_exceeds_children)
+}
+
+/// Rebuild the validity of every struct in `array` so that none of them carries an offset.
+fn compact_struct_validity(array: &dyn PolarsArrowArray) -> Box<dyn PolarsArrowArray> {
+    let Some(struct_array) = array.as_any().downcast_ref::<PolarsArrowStructArray>() else {
+        return array.to_boxed();
+    };
+
+    let values = struct_array
+        .values()
+        .iter()
+        .map(|child| compact_struct_validity(child.as_ref()))
+        .collect();
+
+    // Collecting the bits into a new bitmap starts it at offset zero.
+    let validity = struct_array
+        .validity()
+        .map(|validity| validity.iter().collect::<PolarsArrowBitmap>());
+
+    Box::new(PolarsArrowStructArray::new(
+        struct_array.dtype().clone(),
+        struct_array.len(),
+        values,
+        validity,
+    ))
+}
+
+/// Whether `dtype` is, or contains, the null type.
+///
+/// Polars exports a null array with one (null) buffer for compatibility with older C++
+/// implementations, while Arrow rejects any buffer for that type. A null array on its own is
+/// built directly, but one nested inside a struct or list has to be reached by rebuilding the
+/// array that holds it, because the C data interface cannot carry it.
+fn contains_null_dtype(dtype: &PolarsArrowDataType) -> bool {
+    match dtype {
+        PolarsArrowDataType::Null => true,
+        PolarsArrowDataType::Struct(fields) => fields
+            .iter()
+            .any(|field| contains_null_dtype(field.dtype())),
+        PolarsArrowDataType::List(field)
+        | PolarsArrowDataType::LargeList(field)
+        | PolarsArrowDataType::FixedSizeList(field, _) => contains_null_dtype(field.dtype()),
+        _ => false,
+    }
+}
+
+/// Whether an array of this type has to be rebuilt when reading, rather than sent through
+/// the C data interface.
+///
+/// Two shapes cannot survive the interface:
+///
+/// - Anything holding the null type, whose buffer count the two implementations disagree on.
+/// - A struct beneath a list. Polars expects the convention Arrow uses for a *sliced* struct,
+///   where the children are longer than the struct and are sliced on import, and applies it
+///   unconditionally, which drops rows when a struct inside a list carries a validity.
+fn needs_rebuild_on_read(dtype: &PolarsArrowDataType) -> bool {
+    fn holds_struct(dtype: &PolarsArrowDataType) -> bool {
+        match dtype {
+            PolarsArrowDataType::Struct(_) => true,
+            PolarsArrowDataType::List(field)
+            | PolarsArrowDataType::LargeList(field)
+            | PolarsArrowDataType::FixedSizeList(field, _) => holds_struct(field.dtype()),
+            _ => false,
+        }
+    }
+
+    let struct_beneath_list = match dtype {
+        PolarsArrowDataType::List(field)
+        | PolarsArrowDataType::LargeList(field)
+        | PolarsArrowDataType::FixedSizeList(field, _) => holds_struct(field.dtype()),
+        PolarsArrowDataType::Struct(fields) => fields
+            .iter()
+            .any(|field| needs_rebuild_on_read(field.dtype())),
+        _ => false,
+    };
+
+    contains_null_dtype(dtype) || struct_beneath_list
+}
+
+/// Convert a Polars validity bitmap into Arrow's representation.
+fn to_arrow_nulls(validity: Option<&PolarsArrowBitmap>) -> Option<ArrowNullBuffer> {
+    validity.map(|validity| validity.iter().collect())
+}
+
 impl PolarsArrowArrayRefExt for PolarsArrowArrayRef {
     fn to_arrow_array_ref(&self) -> ArrowBridgeResult<ArrowArrayRef> {
         if matches!(self.dtype(), PolarsArrowDataType::Null) {
             return Ok(Arc::new(ArrowNullArray::new(self.len())));
         }
 
-        // Convert from Polars Arrow to Arrow via Arrow C data interface.
-        let polars_c_arrow_array = export_array_to_c(self.as_ref().to_boxed());
+        // A nested null type cannot cross the C data interface, so the array holding it is
+        // rebuilt from children that are converted one by one.
+        if needs_rebuild_on_read(self.dtype()) {
+            return self.to_arrow_array_ref_without_ffi();
+        }
+
+        let array_data = self.as_ref().to_boxed().to_arrow_array_data()?;
+
+        if !struct_offset_exceeds_children(&array_data) {
+            return Ok(make_array(array_data));
+        }
+
+        // Rebuilding the validity drops the offset, so the export is then well formed.
+        let array_data = compact_struct_validity(self.as_ref()).to_arrow_array_data()?;
+        if struct_offset_exceeds_children(&array_data) {
+            return Err(ArrowBridgeError::Arrow(ArrowError::InvalidArgumentError(
+                format!(
+                    "cannot convert a sliced {:?} array: a struct inside it reports an offset \
+                     its children cannot be sliced by",
+                    self.dtype()
+                ),
+            )));
+        }
+
+        Ok(make_array(array_data))
+    }
+}
+
+trait PolarsArrowArrayRefWithoutFfiExt {
+    /// Rebuild an array that holds a null type, whose children are converted one by one.
+    fn to_arrow_array_ref_without_ffi(&self) -> ArrowBridgeResult<ArrowArrayRef>;
+}
+
+impl PolarsArrowArrayRefWithoutFfiExt for PolarsArrowArrayRef {
+    fn to_arrow_array_ref_without_ffi(&self) -> ArrowBridgeResult<ArrowArrayRef> {
+        let unsupported = || {
+            ArrowBridgeError::Arrow(ArrowError::NotYetImplemented(format!(
+                "converting a {:?} array holding a null type is not supported",
+                self.dtype()
+            )))
+        };
+
+        let field = match self.dtype().to_arrow_data_type()? {
+            ArrowDataType::Struct(fields) => {
+                let struct_array = self
+                    .as_any()
+                    .downcast_ref::<PolarsArrowStructArray>()
+                    .ok_or_else(unsupported)?;
+
+                let children = struct_array
+                    .values()
+                    .iter()
+                    .map(PolarsArrowArrayRefExt::to_arrow_array_ref)
+                    .collect::<ArrowBridgeResult<Vec<_>>>()?;
+
+                return Ok(Arc::new(ArrowStructArray::try_new_with_length(
+                    fields,
+                    children,
+                    to_arrow_nulls(struct_array.validity()),
+                    struct_array.len(),
+                )?));
+            }
+            ArrowDataType::LargeList(field) => field,
+            ArrowDataType::FixedSizeList(field, size) => {
+                let list_array = self
+                    .as_any()
+                    .downcast_ref::<PolarsArrowFixedSizeListArray>()
+                    .ok_or_else(unsupported)?;
+
+                return Ok(Arc::new(ArrowFixedSizeListArray::try_new(
+                    field,
+                    size,
+                    list_array.values().to_boxed().to_arrow_array_ref()?,
+                    to_arrow_nulls(list_array.validity()),
+                )?));
+            }
+            _ => return Err(unsupported()),
+        };
+
+        let list_array = self
+            .as_any()
+            .downcast_ref::<PolarsArrowListArray<i64>>()
+            .ok_or_else(unsupported)?;
+
+        let offsets = ArrowOffsetBuffer::new(list_array.offsets().iter().copied().collect());
+
+        Ok(Arc::new(ArrowLargeListArray::try_new(
+            field,
+            offsets,
+            list_array.values().to_boxed().to_arrow_array_ref()?,
+            to_arrow_nulls(list_array.validity()),
+        )?))
+    }
+}
+
+trait PolarsArrowArrayBoxExt {
+    /// Convert from Polars Arrow to Arrow via the Arrow C data interface.
+    fn to_arrow_array_data(self) -> ArrowBridgeResult<ArrowArrayData>;
+}
+
+impl PolarsArrowArrayBoxExt for Box<dyn PolarsArrowArray> {
+    fn to_arrow_array_data(self) -> ArrowBridgeResult<ArrowArrayData> {
         let arrow_data_type = self.dtype().to_arrow_data_type()?;
-        let array_data = unsafe {
+        let polars_c_arrow_array = export_array_to_c(self);
+
+        unsafe {
             let c_arrow_array = polars_c_arrow_array.into_c_arrow_array();
             from_ffi_and_data_type(c_arrow_array, arrow_data_type)
-        }?;
-        Ok(make_array(array_data))
+        }
+        .map_err(Into::into)
     }
 }
 
@@ -273,8 +598,45 @@ mod tests {
 
     use super::{
         ArrowArrayRef, ArrowArrayRefExt, ArrowDataTypeExt, ArrowField, ArrowFieldExt,
-        ArrowRecordBatch, ArrowRecordBatchExt, ArrowSchema, ArrowSchemaExt,
+        ArrowRecordBatch, ArrowRecordBatchExt, ArrowSchema, ArrowSchemaExt, PolarsArrowArrayRefExt,
     };
+
+    fn nullable_struct_array() -> PolarsStructArray {
+        let dtype = PolarsArrowDataType::Struct(vec![super::PolarsArrowField::new(
+            "x".into(),
+            PolarsArrowDataType::Int32,
+            true,
+        )]);
+        PolarsStructArray::new(
+            dtype,
+            3,
+            vec![Box::new(PolarsInt32Array::from(vec![Some(1), Some(2), Some(3)])) as _],
+            Some([true, false, true].into_iter().collect()),
+        )
+    }
+
+    /// Slicing a struct array leaves its validity at an offset, which Polars reports over the
+    /// C data interface even though the children are already sliced. Converting such an array
+    /// used to panic inside Arrow.
+    #[test]
+    fn to_arrow_array_ref_converts_a_sliced_struct_with_nulls() {
+        let array = nullable_struct_array();
+
+        for (offset, length) in [(0, 3), (1, 1), (1, 2), (2, 1)] {
+            let sliced: super::PolarsArrowArrayRef = array.clone().sliced(offset, length).boxed();
+
+            let converted = sliced
+                .to_arrow_array_ref()
+                .expect("sliced struct should convert");
+
+            assert_eq!(converted.len(), length);
+            assert_eq!(
+                converted.null_count(),
+                sliced.null_count(),
+                "nulls should survive slicing at offset {offset}"
+            );
+        }
+    }
 
     #[test]
     fn to_polars_arrow_data_type() {
