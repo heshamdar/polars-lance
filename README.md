@@ -115,8 +115,12 @@ The marker Lance uses lives in Arrow field metadata, which a Polars schema does 
 it has to be named rather than travelling with the column. Reading needs nothing extra: a scan
 asks Lance for the bytes, so the column arrives as the `Binary` column the schema advertises.
 
-Streaming a blob column that contains nulls is not supported — Lance's encoder fails an
-internal assertion — so write such a frame with `write_lance` rather than `sink_lance`.
+Lance encodes a blob column's nullability from the data in each batch rather than from the
+column, and assumes every batch agrees
+([lance#8033](https://github.com/lance-format/lance/issues/8033)). A streamed query whose nulls
+fall in only some batches would store those nulls as empty values, so that write is refused with
+an error instead. Either collect the frame and use `write_lance`, or pass a `chunk_size` large
+enough to keep the column's nulls in one batch.
 
 ### Nulls in structs
 

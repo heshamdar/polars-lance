@@ -12,6 +12,7 @@ use pyo3::wrap_pyfunction;
 use pyo3_polars::error::PyPolarsErr;
 use pyo3_polars::{PyDataFrame, PySchema};
 
+use crate::blob::BlobNullability;
 use crate::io::StorageOptions;
 use crate::{
     arrow_schema_for_write, df_to_record_batches, write_lance_dataset, write_lance_dataset_from_df,
@@ -112,15 +113,19 @@ struct PyDataFrameBatchReader {
     schema: SchemaRef,
     /// Batches of the dataframe read most recently, which may have several chunks.
     pending: VecDeque<RecordBatch>,
+    /// The streaming engine decides where batches begin, so a column's nulls can land in some
+    /// batches and not others, which Lance's blob encoder cannot express.
+    blob_nullability: BlobNullability,
     done: bool,
 }
 
 impl PyDataFrameBatchReader {
-    fn new(dataframes: Py<PyAny>, schema: SchemaRef) -> Self {
+    fn new(dataframes: Py<PyAny>, schema: SchemaRef, blob_columns: &[String]) -> Self {
         Self {
             dataframes,
             schema,
             pending: VecDeque::new(),
+            blob_nullability: BlobNullability::new(blob_columns),
             done: false,
         }
     }
@@ -153,6 +158,7 @@ impl PyDataFrameBatchReader {
             // built from one morsel can describe a column as non-nullable just because that
             // morsel holds no nulls, which Lance rejects when the dataset says otherwise.
             let batch = RecordBatch::try_new(self.schema.clone(), batch.columns().to_vec())?;
+            self.blob_nullability.check(&batch)?;
             self.pending.push_back(batch);
         }
 
@@ -259,7 +265,7 @@ fn write_lance_stream(
     let blob_columns = blob_columns.unwrap_or_default();
     let schema: DataFrame = schema.into();
     let schema = Arc::new(arrow_schema_for_write(&schema, &blob_columns).map_err(PyErr::from)?);
-    let reader = PyDataFrameBatchReader::new(dataframes, schema);
+    let reader = PyDataFrameBatchReader::new(dataframes, schema, &blob_columns);
 
     // The reader takes the GIL to pull each dataframe, so it cannot be held here.
     py.detach(|| {

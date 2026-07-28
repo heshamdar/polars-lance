@@ -137,9 +137,12 @@ def write_lance(
         size may exceed this limit.
     data_storage_version : {'2.1', '2.0'}
         Lance file format version to write a new dataset with. Defaults to `2.1`, which
-        records the validity of a struct so that a null struct stays null. Pass `2.0` for a
-        column that is a list of structs holding a null struct, which the 2.1 encoder
-        cannot write. Ignored when appending, which keeps the existing dataset's version.
+        records the validity of a struct so that a null struct stays null. Pass `2.0` to
+        write the older format, which Lance itself still writes by default. Ignored when
+        appending, which keeps the existing dataset's version.
+    blob_columns
+        Names of binary columns to store out of line, so that a scan not selecting them
+        never reads the bytes. Each has to be a binary column of the frame.
 
     Examples
     --------
@@ -219,9 +222,15 @@ def sink_lance(
         Number of rows per batch to request from the streaming engine.
     data_storage_version : {'2.1', '2.0'}
         Lance file format version to write a new dataset with. Defaults to `2.1`, which
-        records the validity of a struct so that a null struct stays null. Pass `2.0` for a
-        column that is a list of structs holding a null struct, which the 2.1 encoder
-        cannot write. Ignored when appending, which keeps the existing dataset's version.
+        records the validity of a struct so that a null struct stays null. Pass `2.0` to
+        write the older format, which Lance itself still writes by default. Ignored when
+        appending, which keeps the existing dataset's version.
+    blob_columns
+        Names of binary columns to store out of line, so that a scan not selecting them
+        never reads the bytes. Each has to be a binary column of the frame. A column whose
+        nulls fall in only some of the streamed batches is refused, because Lance would
+        store those nulls as empty values; use `write_lance`, or a `chunk_size` large
+        enough to keep the column's nulls in one batch.
 
     Examples
     --------
