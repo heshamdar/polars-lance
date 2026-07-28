@@ -5,6 +5,10 @@ from typing import Literal
 
 import polars as pl
 
+# Whether the extension was compiled with debug assertions, which decides whether Lance's
+# `debug_assert!`s are live. Only the tests need this.
+_debug_assertions: bool
+
 class LanceReader:
     def __init__(
         self,
