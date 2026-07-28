@@ -13,9 +13,61 @@ use std::collections::HashSet;
 
 use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
 use arrow::error::ArrowError;
+use arrow::record_batch::RecordBatch;
 
 /// Field metadata key Lance uses to mark a blob column.
 const BLOB_META_KEY: &str = "lance-encoding:blob";
+
+/// Refuses a write whose batches disagree about whether a blob column holds nulls.
+///
+/// Lance's blob encoder derives how it interprets nullability from each batch's data rather than
+/// from the field, and then assumes every later batch agrees
+/// (<https://github.com/lance-format/lance/issues/8033>). When they disagree it trips a debug
+/// assertion in a debug build, and in a release build the outcome is luck: one arrangement
+/// writes the nulls, another writes them as empty values. Since nothing downstream can tell
+/// those apart, the write is refused rather than left to chance.
+///
+/// Lance decides by null count, so this does too, which keeps the two in step.
+pub struct BlobNullability {
+    /// Column name, paired with whether the first batch holding it had any nulls.
+    columns: Vec<(String, Option<bool>)>,
+}
+
+impl BlobNullability {
+    pub fn new(blob_columns: &[String]) -> Self {
+        Self {
+            columns: blob_columns
+                .iter()
+                .map(|name| (name.clone(), None))
+                .collect(),
+        }
+    }
+
+    /// Record this batch, failing if it disagrees with one already seen.
+    pub fn check(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
+        for (name, seen) in &mut self.columns {
+            let Some(column) = batch.column_by_name(name) else {
+                continue;
+            };
+
+            let holds_nulls = column.null_count() > 0;
+            match seen {
+                None => *seen = Some(holds_nulls),
+                Some(first) if *first != holds_nulls => {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "blob column {name:?} has nulls in some batches of this write but not \
+                         others, which Lance cannot encode consistently: it may store those \
+                         nulls as empty values. Write the frame with `write_lance`, or choose a \
+                         `chunk_size` that keeps the column's nulls from splitting across batches."
+                    )));
+                }
+                Some(_) => {}
+            }
+        }
+
+        Ok(())
+    }
+}
 
 /// Mark the named columns so Lance stores them out of line.
 ///
@@ -72,9 +124,68 @@ pub fn mark_blob_columns(
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
+    use std::sync::Arc;
 
-    use super::{mark_blob_columns, BLOB_META_KEY};
+    use arrow::array::LargeBinaryArray;
+    use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
+    use arrow::record_batch::RecordBatch;
+
+    use super::{mark_blob_columns, BlobNullability, BLOB_META_KEY};
+
+    fn blob_batch(values: Vec<Option<&[u8]>>) -> RecordBatch {
+        let schema = ArrowSchema::new(vec![ArrowField::new(
+            "blob",
+            ArrowDataType::LargeBinary,
+            true,
+        )]);
+        RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(LargeBinaryArray::from(values))],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn blob_nullability_accepts_batches_that_agree() {
+        for batches in [
+            vec![vec![Some(&b"a"[..])], vec![Some(&b"b"[..])]],
+            vec![vec![None], vec![None]],
+            vec![vec![Some(&b"a"[..]), None], vec![None, Some(&b"b"[..])]],
+        ] {
+            let mut nullability = BlobNullability::new(&["blob".to_owned()]);
+
+            for batch in batches {
+                nullability.check(&blob_batch(batch)).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn blob_nullability_refuses_batches_that_disagree() {
+        let mut nullability = BlobNullability::new(&["blob".to_owned()]);
+        nullability
+            .check(&blob_batch(vec![Some(&b"a"[..])]))
+            .unwrap();
+
+        let error = nullability.check(&blob_batch(vec![None])).unwrap_err();
+
+        assert!(
+            error.to_string().contains("has nulls in some batches"),
+            "{error}"
+        );
+    }
+
+    /// A column that was not asked to be a blob is Lance's ordinary encoder's problem, which
+    /// handles a mix of batches.
+    #[test]
+    fn blob_nullability_ignores_columns_that_are_not_blobs() {
+        let mut nullability = BlobNullability::new(&[]);
+
+        nullability
+            .check(&blob_batch(vec![Some(&b"a"[..])]))
+            .unwrap();
+        nullability.check(&blob_batch(vec![None])).unwrap();
+    }
 
     fn schema() -> ArrowSchema {
         ArrowSchema::new(vec![

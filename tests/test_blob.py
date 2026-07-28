@@ -76,19 +76,48 @@ def test_blob_nulls_survive(tmp_path: Path) -> None:
     assert scan_lance(dataset_path).collect().equals(frame)
 
 
-# Streaming a blob column that holds a null trips an assertion inside Lance's encoder
-# (`AllValidItem` against `NullableItem`). Writing the collected frame works.
-@pytest.mark.xfail(
-    reason="lance: streaming a nullable blob column fails an internal assertion"
-)
-def test_sink_blob_with_nulls(tmp_path: Path) -> None:
+# Lance's blob encoder infers how to interpret nullability from each batch's data rather than
+# from the field, then assumes every later batch agrees (lance-format/lance#8033). Streaming this
+# frame yields one morsel holding the value and one holding the null, so they disagree, and Lance
+# may then store the null as an empty value. That is refused rather than written.
+def test_sink_blob_with_nulls_is_refused(tmp_path: Path) -> None:
     frame = pl.DataFrame(
         {"id": [1, 2], "blob": [b"a" * 500, None]},
         schema={"id": pl.Int64, "blob": pl.Binary},
     )
     dataset_path = tmp_path / "sink_nulls.lance"
 
-    sink_lance(frame.lazy(), target=dataset_path, blob_columns=["blob"])
+    with pytest.raises(RuntimeError, match="has nulls in some batches"):
+        sink_lance(frame.lazy(), target=dataset_path, blob_columns=["blob"])
+
+
+# A large enough chunk keeps the nulls in one batch, which Lance encodes correctly.
+def test_sink_blob_with_nulls_in_a_single_batch(tmp_path: Path) -> None:
+    frame = pl.DataFrame(
+        {"id": [1, 2], "blob": [b"a" * 500, None]},
+        schema={"id": pl.Int64, "blob": pl.Binary},
+    )
+    dataset_path = tmp_path / "sink_one_batch.lance"
+
+    sink_lance(
+        frame.lazy(),
+        target=dataset_path,
+        blob_columns=["blob"],
+        chunk_size=frame.height,
+    )
+
+    assert scan_lance(dataset_path).collect().equals(frame)
+
+
+# Batches that all hold a null agree, so streaming them is fine.
+def test_sink_blob_with_nulls_in_every_batch(tmp_path: Path) -> None:
+    frame = pl.DataFrame(
+        {"id": [1, 2, 3, 4], "blob": [b"a" * 400, None, b"b" * 400, None]},
+        schema={"id": pl.Int64, "blob": pl.Binary},
+    )
+    dataset_path = tmp_path / "sink_every.lance"
+
+    sink_lance(frame.lazy(), target=dataset_path, blob_columns=["blob"], chunk_size=2)
 
     assert scan_lance(dataset_path).collect().equals(frame)
 

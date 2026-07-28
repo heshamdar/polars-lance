@@ -9,7 +9,7 @@ use polars::frame::chunk_df_for_writing;
 use polars::prelude::{CompatLevel, DataFrame, SchemaExt};
 
 use crate::arrow::{ArrowBridgeError, PolarsArrowRecordBatchExt, PolarsArrowSchemaExt};
-use crate::blob::mark_blob_columns;
+use crate::blob::{mark_blob_columns, BlobNullability};
 use crate::err::LanceWriterError;
 use crate::io::StorageOptions;
 use crate::sync::TOKIO_RUNTIME;
@@ -166,6 +166,15 @@ pub fn write_lance_dataset_from_df(
 ) -> Result<(), LanceWriterError> {
     let schema = Arc::new(arrow_schema_for_write(&df, blob_columns)?);
     let batches = df_to_record_batches(df)?;
+
+    // A dataframe with several chunks becomes several batches, which the blob encoder needs to
+    // agree about nullability.
+    let mut blob_nullability = BlobNullability::new(blob_columns);
+    for batch in batches.iter().flatten() {
+        blob_nullability
+            .check(batch)
+            .map_err(LanceWriterError::Arrow)?;
+    }
 
     write_lance_dataset(
         RecordBatchIterator::new(batches.into_iter(), schema),
