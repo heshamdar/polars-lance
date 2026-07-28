@@ -1,26 +1,39 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Literal
 
 import polars as pl
 
-class LanceScanner:
+class LanceReader:
     def __init__(
         self,
         uri: str,
-        with_columns: list[str] | None = None,
-        predicate: pl.Expr | None = None,
-        n_rows: int | None = None,
-        batch_size: int | None = None,
         storage_options: dict[str, str] | None = None,
     ) -> None: ...
-    @staticmethod
-    def schema_for_uri(
-        uri: str,
-        storage_options: dict[str, str] | None = None,
-    ) -> dict[str, pl.DataType]: ...
+    def schema(self) -> dict[str, pl.DataType]: ...
+    def scanner(
+        self,
+        with_columns: list[str] | None = None,
+        filter: str | None = None,
+        n_rows: int | None = None,
+        batch_size: int | None = None,
+    ) -> LanceScanner: ...
+
+class LanceScanner:
     def next(self) -> pl.DataFrame | None: ...
 
+def write_lance_stream(
+    dataframes: Iterator[pl.DataFrame],
+    schema: pl.DataFrame,
+    target: str,
+    *,
+    mode: str = "error",
+    storage_options: dict[str, str] | None = None,
+    max_rows_per_file: int | None = None,
+    max_bytes_per_file: int | None = None,
+    data_storage_version: str | None = None,
+) -> None: ...
 def write_lance(
     df: pl.DataFrame,
     target: str,
@@ -29,4 +42,5 @@ def write_lance(
     storage_options: dict[str, str] | None = None,
     max_rows_per_file: int | None = None,
     max_bytes_per_file: int | None = None,
+    data_storage_version: str | None = None,
 ) -> None: ...

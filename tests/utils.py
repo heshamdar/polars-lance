@@ -1,8 +1,11 @@
+from collections.abc import Iterator, Mapping
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 
 import polars as pl
 import pyarrow as pa
+from polars.datatypes import DataTypeClass
+from polars.io.plugins import register_io_source
 from testcontainers.azurite import AzuriteContainer
 from testcontainers.minio import MinioContainer
 
@@ -115,6 +118,85 @@ SUPPORTED_DATA_TYPES_ARROW_TABLE = pa.table(
         for name, dtype, values in SUPPORTED_DATA_TYPES_COLUMNS
     }
 )
+
+
+# A small table for exercising predicates. It includes nulls, and values that are only
+# matched by part of a predicate, so that filtering mistakes change the result.
+FILTER_ARROW_TABLE = pa.table(
+    {
+        "int32": pa.array([1, 2, 3, 4, 5, None], pa.int32()),
+        "float64": pa.array([1.5, 2.5, 3.5, 4.5, 5.5, None], pa.float64()),
+        "string": pa.array(["a", "b", "xc", "d", None, "xe"], pa.string()),
+        "date32": pa.array(
+            [date(2024, 1, day) for day in range(1, 7)],
+            pa.date32(),
+        ),
+    }
+)
+
+
+# Nested data with a null at every level that can hold one: a null list, an empty list, a
+# null struct inside a list, a null field inside a struct, and a null list element.
+NESTED_ARROW_TABLE = pa.table(
+    {
+        "id": pa.array([1, 2, 3, 4, 5], pa.int64()),
+        "list_of_struct": pa.array(
+            [
+                [{"x": 1, "name": "a"}, {"x": 2, "name": "b"}],
+                [],
+                None,
+                [None, {"x": 4, "name": None}],
+                [{"x": None, "name": "e"}],
+            ],
+            pa.list_(pa.struct([("x", pa.int64()), ("name", pa.string())])),
+        ),
+        "struct_of_list": pa.array(
+            [
+                {"values": [1, 2], "label": "a"},
+                {"values": [], "label": "b"},
+                None,
+                {"values": None, "label": None},
+                {"values": [None, 5], "label": "e"},
+            ],
+            pa.struct([("values", pa.list_(pa.int64())), ("label", pa.string())]),
+        ),
+        "list_of_list": pa.array(
+            [[[1, 2], [3]], [[]], None, [None], [[None]]],
+            pa.list_(pa.list_(pa.int64())),
+        ),
+    }
+)
+
+
+def delivered_predicate(
+    predicate: pl.Expr,
+    schema: Mapping[str, pl.DataType | DataTypeClass],
+) -> pl.Expr:
+    """
+    Return the predicate as Polars delivers it to an IO plugin.
+
+    Building an expression with the Python API is not enough: the optimizer resolves
+    literal dtypes and rewrites some expressions, and the translation runs on the result.
+    """
+    delivered: list[pl.Expr | None] = []
+
+    def io_source(
+        with_columns: list[str] | None,
+        predicate: pl.Expr | None,
+        n_rows: int | None,
+        batch_size: int | None,
+    ) -> Iterator[pl.DataFrame]:
+        delivered.append(predicate)
+        columns = with_columns if with_columns is not None else list(schema)
+        yield pl.DataFrame(
+            {name: pl.Series([], dtype=schema[name]) for name in columns}
+        )
+
+    register_io_source(io_source=io_source, schema=schema).filter(predicate).collect()
+
+    assert delivered, "predicate was not pushed into the scan"
+    assert delivered[-1] is not None, "predicate was not pushed into the scan"
+    return delivered[-1]
 
 
 def to_polars_arrow(
