@@ -145,9 +145,15 @@ impl PyDataFrameBatchReader {
 
         for batch in df_to_record_batches(df).map_err(to_arrow_error)? {
             let batch = batch?;
-            if batch.num_rows() > 0 {
-                self.pending.push_back(batch);
+            if batch.num_rows() == 0 {
+                continue;
             }
+
+            // A reader has to hand out batches matching the schema it advertises. A batch
+            // built from one morsel can describe a column as non-nullable just because that
+            // morsel holds no nulls, which Lance rejects when the dataset says otherwise.
+            let batch = RecordBatch::try_new(self.schema.clone(), batch.columns().to_vec())?;
+            self.pending.push_back(batch);
         }
 
         Ok(true)
@@ -198,7 +204,8 @@ impl RecordBatchReader for PyDataFrameBatchReader {
     storage_options = None,
     max_rows_per_file = None,
     max_bytes_per_file = None,
-    data_storage_version = None
+    data_storage_version = None,
+    blob_columns = None
 ))]
 fn write_lance(
     df: PyDataFrame,
@@ -208,6 +215,7 @@ fn write_lance(
     max_rows_per_file: Option<usize>,
     max_bytes_per_file: Option<usize>,
     data_storage_version: Option<String>,
+    blob_columns: Option<Vec<String>>,
 ) -> PyResult<()> {
     write_lance_dataset_from_df(
         df.into(),
@@ -217,6 +225,7 @@ fn write_lance(
         max_rows_per_file,
         max_bytes_per_file,
         data_storage_version.as_deref(),
+        &blob_columns.unwrap_or_default(),
     )
     .map_err(PyErr::from)
 }
@@ -231,7 +240,8 @@ fn write_lance(
     storage_options = None,
     max_rows_per_file = None,
     max_bytes_per_file = None,
-    data_storage_version = None
+    data_storage_version = None,
+    blob_columns = None
 ))]
 fn write_lance_stream(
     py: Python,
@@ -243,10 +253,12 @@ fn write_lance_stream(
     max_rows_per_file: Option<usize>,
     max_bytes_per_file: Option<usize>,
     data_storage_version: Option<String>,
+    blob_columns: Option<Vec<String>>,
 ) -> PyResult<()> {
     let mode = parse_write_mode(mode)?;
+    let blob_columns = blob_columns.unwrap_or_default();
     let schema: DataFrame = schema.into();
-    let schema = Arc::new(arrow_schema_for_write(&schema).map_err(PyErr::from)?);
+    let schema = Arc::new(arrow_schema_for_write(&schema, &blob_columns).map_err(PyErr::from)?);
     let reader = PyDataFrameBatchReader::new(dataframes, schema);
 
     // The reader takes the GIL to pull each dataframe, so it cannot be held here.

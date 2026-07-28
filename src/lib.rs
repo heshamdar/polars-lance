@@ -1,4 +1,5 @@
 mod arrow;
+mod blob;
 mod err;
 mod io;
 mod scan;

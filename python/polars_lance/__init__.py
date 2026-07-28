@@ -104,6 +104,7 @@ def write_lance(
     max_rows_per_file: int | None = None,
     max_bytes_per_file: int | None = None,
     data_storage_version: str | None = None,
+    blob_columns: list[str] | None = None,
 ) -> None:
     """
     Write dataframe to a Lance dataset.
@@ -166,6 +167,7 @@ def write_lance(
         max_rows_per_file=max_rows_per_file,
         max_bytes_per_file=max_bytes_per_file,
         data_storage_version=data_storage_version,
+        blob_columns=blob_columns,
     )
 
 
@@ -179,6 +181,7 @@ def sink_lance(
     max_bytes_per_file: int | None = None,
     chunk_size: int | None = None,
     data_storage_version: str | None = None,
+    blob_columns: list[str] | None = None,
 ) -> None:
     """
     Stream a lazy query into a Lance dataset.
@@ -238,4 +241,5 @@ def sink_lance(
         max_rows_per_file=max_rows_per_file,
         max_bytes_per_file=max_bytes_per_file,
         data_storage_version=data_storage_version,
+        blob_columns=blob_columns,
     )
