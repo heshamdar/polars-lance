@@ -58,7 +58,7 @@ def test_write_uses_the_blob_extension_type(
 def test_blob_columns_before_2_2_are_refused(
     tmp_path: Path, blob_frame: pl.DataFrame, version: str
 ) -> None:
-    with pytest.raises(RuntimeError, match="blob_columns needs data storage"):
+    with pytest.raises(ValueError, match="blob_columns needs data storage"):
         write_lance(
             blob_frame,
             target=tmp_path / "old.lance",
@@ -194,5 +194,5 @@ def test_filter_alongside_a_blob(tmp_path: Path, blob_frame: pl.DataFrame) -> No
 def test_blob_columns_is_validated(
     tmp_path: Path, blob_frame: pl.DataFrame, columns: list[str], message: str
 ) -> None:
-    with pytest.raises(RuntimeError, match=message):
+    with pytest.raises(ValueError, match=message):
         write_lance(blob_frame, target=tmp_path / "bad.lance", blob_columns=columns)

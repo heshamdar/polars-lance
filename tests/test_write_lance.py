@@ -157,7 +157,7 @@ def test_sink_lance_error_mode(tmp_path: Path) -> None:
     dataset_path = tmp_path / "lazy_error.lance"
     sink_lance(pl.LazyFrame({"id": [1]}), target=dataset_path)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(FileExistsError):
         sink_lance(pl.LazyFrame({"id": [2]}), target=dataset_path)
 
 
@@ -208,7 +208,7 @@ def test_write_lance_error_mode(tmp_path: Path) -> None:
     dataset_path = tmp_path / "test.lance"
     write_lance(first, target=dataset_path)
 
-    with pytest.raises(RuntimeError, match="already exists"):
+    with pytest.raises(FileExistsError, match="already exists"):
         write_lance(second, target=dataset_path, mode="error")
 
 

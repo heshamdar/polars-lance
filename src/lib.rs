@@ -7,6 +7,8 @@ mod sync;
 mod write;
 
 #[cfg(feature = "pyo3")]
+mod exc;
+#[cfg(feature = "pyo3")]
 mod py;
 
 pub use err::{LanceScannerError, LanceWriterError};
