@@ -64,6 +64,12 @@ that results stay correct:
 The translation is checked against both engines on data containing nulls, empty strings and
 lists, regex metacharacters, and non-ASCII text — see `tests/test_predicate_equivalence.py`.
 
+Aggregations are **not** pushed down, and cannot be: Polars' IO plugin API hands a scan only
+the projection, the predicate, a row limit and a batch size, so there is no way to learn that
+a query is computing an aggregate. `scan_lance("x.lance").select(pl.len())` reads a column
+and counts it in Polars rather than asking Lance for the row count. Reach for
+`lance.dataset(...).count_rows()` when a count is all you need.
+
 ## Write
 
 ```python
