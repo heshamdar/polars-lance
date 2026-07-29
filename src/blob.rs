@@ -60,6 +60,10 @@ fn is_blob_v2(field: &ArrowField) -> bool {
 /// Columns that are not blob v2 are passed through, so this also covers the legacy layout,
 /// where only the schema differs. Re-stating the schema matters on its own: a batch built from
 /// one morsel can call a column non-nullable just because that morsel holds no nulls.
+///
+/// Columns are matched to fields by name. Pairing them positionally would wrap whichever
+/// column happened to sit at the blob field's index, which for two columns of the same type
+/// swaps their contents without any error being raised.
 pub fn wrap_blob_v2_columns(
     batch: &RecordBatch,
     schema: &ArrowSchemaRef,
@@ -67,8 +71,14 @@ pub fn wrap_blob_v2_columns(
     let columns = schema
         .fields()
         .iter()
-        .zip(batch.columns())
-        .map(|(field, column)| {
+        .map(|field| {
+            let column = batch.column_by_name(field.name()).ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "the batch is missing column {:?}, which the schema being written declares",
+                    field.name()
+                ))
+            })?;
+
             if !is_blob_v2(field) {
                 return Ok(Arc::clone(column));
             }
@@ -280,6 +290,86 @@ mod tests {
         );
         assert_eq!(column.null_count(), 1);
         assert!(column.is_null(1));
+    }
+
+    /// Columns are paired to fields by name, not by position.
+    ///
+    /// The streaming writer hands over a batch built from the query's own schema, which is
+    /// only incidentally in the same order as the schema being written. With two columns of
+    /// the same type, pairing by position wraps the wrong one and swaps their contents, and
+    /// every downstream check still passes because the types line up.
+    #[test]
+    fn wraps_the_named_column_when_the_batch_is_in_another_order() {
+        let schema = Arc::new(
+            mark_blob_columns(
+                ArrowSchema::new(vec![
+                    ArrowField::new("blob", ArrowDataType::LargeBinary, true),
+                    ArrowField::new("other", ArrowDataType::LargeBinary, true),
+                ]),
+                &["blob".to_owned()],
+            )
+            .unwrap(),
+        );
+
+        // Reversed relative to the schema, and both columns are binary.
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                ArrowField::new("other", ArrowDataType::LargeBinary, true),
+                ArrowField::new("blob", ArrowDataType::LargeBinary, true),
+            ])),
+            vec![
+                Arc::new(LargeBinaryArray::from(vec![Some(&b"other"[..])])),
+                Arc::new(LargeBinaryArray::from(vec![Some(&b"blob"[..])])),
+            ],
+        )
+        .unwrap();
+
+        let wrapped = wrap_blob_v2_columns(&batch, &schema).unwrap();
+
+        let blob = wrapped.column_by_name("blob").unwrap();
+        let data = blob
+            .as_any()
+            .downcast_ref::<arrow::array::StructArray>()
+            .expect("the blob column should have been wrapped in the extension struct")
+            .column_by_name("data")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<LargeBinaryArray>()
+            .unwrap()
+            .value(0)
+            .to_vec();
+        assert_eq!(data, b"blob".to_vec(), "wrapped the wrong column");
+
+        let other = wrapped.column_by_name("other").unwrap();
+        assert_eq!(other.data_type(), &ArrowDataType::LargeBinary);
+        assert_eq!(
+            other
+                .as_any()
+                .downcast_ref::<LargeBinaryArray>()
+                .unwrap()
+                .value(0),
+            b"other"
+        );
+    }
+
+    /// A field with no matching column is reported rather than silently dropped, which is
+    /// what zipping the two sequences used to do.
+    #[test]
+    fn refuses_a_batch_missing_a_column_the_schema_declares() {
+        let schema = Arc::new(schema());
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![ArrowField::new(
+                "id",
+                ArrowDataType::Int64,
+                false,
+            )])),
+            vec![Arc::new(arrow::array::Int64Array::from(vec![1]))],
+        )
+        .unwrap();
+
+        let error = wrap_blob_v2_columns(&batch, &schema).unwrap_err();
+
+        assert!(error.to_string().contains("missing column"), "{error}");
     }
 
     #[test]
