@@ -9,6 +9,12 @@ import polars as pl
 # `debug_assert!`s are live. Only the tests need this.
 _debug_assertions: bool
 
+class PolarsLanceError(RuntimeError):
+    """A Lance failure with no exact Python counterpart."""
+
+class CommitConflictError(PolarsLanceError):
+    """A concurrent write won the race to commit."""
+
 class LanceReader:
     def __init__(
         self,

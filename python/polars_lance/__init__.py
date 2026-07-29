@@ -6,9 +6,16 @@ import polars as pl
 from polars.io.plugins import register_io_source
 
 from polars_lance import _polars_lance
+from polars_lance._polars_lance import CommitConflictError, PolarsLanceError
 from polars_lance._predicate import to_lance_sql
 
-__all__ = ["scan_lance", "sink_lance", "write_lance"]
+__all__ = [
+    "CommitConflictError",
+    "PolarsLanceError",
+    "scan_lance",
+    "sink_lance",
+    "write_lance",
+]
 
 
 def scan_lance(
@@ -18,6 +25,11 @@ def scan_lance(
 ) -> pl.LazyFrame:
     """
     Lazily read from a Lance dataset.
+
+    The dataset's manifest is read here so that the schema is known, which also fixes the
+    version being read: a write that lands afterwards is not visible to a later `collect` on
+    the returned frame. Call `scan_lance` again to pick up a newer version. No data is read
+    until the query is collected.
 
     Parameters
     ----------
@@ -89,7 +101,9 @@ def scan_lance(
             if remaining_rows == 0:
                 return
 
-    return register_io_source(io_source=io_source, schema=schema)
+    # The scan reads a fixed dataset version, so two occurrences of it in one plan produce
+    # the same rows and Polars is free to evaluate it once.
+    return register_io_source(io_source=io_source, schema=schema, is_pure=True)
 
 
 def write_lance(
