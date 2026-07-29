@@ -8,6 +8,11 @@ Polars plugin for reading Lance datasets into Polars dataframes and writing Pola
 pip install polars-lance
 ```
 
+The wheel embeds a copy of Polars' Rust core, so the Polars it is installed next to has to
+match: each release requires the Polars version named in `pyproject.toml`, currently `1.40`
+or newer. That floor moves whenever the Rust dependencies do, rather than tracking the
+oldest Polars whose Python API would suffice.
+
 ## Read
 
 ```python
@@ -16,6 +21,11 @@ from polars_lance import scan_lance
 lf = scan_lance("example.lance")
 df = lf.collect()
 ```
+
+`scan_lance` reads the dataset's manifest so that it can report a schema, and no data beyond
+that until the query is collected. Reading the manifest also fixes the version being scanned,
+so a write that lands afterwards is not picked up by a later `collect` on the same frame —
+call `scan_lance` again for that.
 
 ### Pushdown
 

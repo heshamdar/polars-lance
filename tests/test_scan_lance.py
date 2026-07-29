@@ -1,3 +1,6 @@
+import threading
+import time
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
@@ -166,6 +169,98 @@ def test_scan_lance_zero_rows(tmp_path: Path) -> None:
 
     assert df.height == 0
     assert df.schema == lf.collect_schema()
+
+
+# Planning must read the manifest and nothing else. Moving the data files aside leaves a
+# dataset that can still be opened and described but not read, so a plan that reaches for data
+# too early fails here rather than merely being slower than it looks. Building the frame,
+# resolving its schema and printing its plan all have to survive; only `collect` may fail.
+def test_planning_reads_no_data(tmp_path: Path) -> None:
+    dataset_path = tmp_path / "test.lance"
+    lance.write_dataset(FILTER_ARROW_TABLE, dataset_path)
+
+    data_files = list((dataset_path / "data").glob("*.lance"))
+    assert data_files, "expected the dataset to have data files"
+    for data_file in data_files:
+        data_file.rename(data_file.with_suffix(".moved"))
+
+    lf = scan_lance(dataset_path).filter(pl.col("int32") > 2).select("int32")
+    assert lf.collect_schema() == pl.Schema({"int32": pl.Int32})
+    lf.explain()
+
+    with pytest.raises(Exception):
+        lf.collect()
+
+    # With the data back, the very same frame collects, so the failure above was the missing
+    # data rather than anything wrong with the plan.
+    for data_file in data_files:
+        data_file.with_suffix(".moved").rename(data_file)
+    assert (
+        scan_lance(dataset_path)
+        .filter(pl.col("int32") > 2)
+        .select("int32")
+        .collect()
+        .height
+        == 3
+    )
+
+
+def _ticks_per_second(work: Callable[[], object]) -> float:
+    """How fast another thread can run Python while `work` occupies this one."""
+    ticks = 0
+    stop = threading.Event()
+
+    def spin() -> None:
+        nonlocal ticks
+        while not stop.is_set():
+            ticks += 1
+            time.sleep(
+                0
+            )  # yield, so this measures GIL availability rather than a busy loop
+
+    spinner = threading.Thread(target=spin, daemon=True)
+    spinner.start()
+    try:
+        started = time.perf_counter()
+        work()
+        elapsed = time.perf_counter() - started
+    finally:
+        stop.set()
+        spinner.join(timeout=5)
+
+    return ticks / elapsed
+
+
+# Polars' streaming engine drives scans from worker threads, so a scan that keeps the GIL while
+# it waits on Lance throttles the whole query. Rather than a magic tick count, this compares the
+# rate another thread achieves during a scan against the rate it achieves while this thread
+# merely sleeps, which is the best case. Measured both ways on this suite: releasing the GIL
+# scores ~0.97-1.01, holding it ~0.016-0.024, so the threshold sits about ten times above the
+# failing case and four times below the passing one.
+def test_scan_releases_the_gil(tmp_path: Path) -> None:
+    dataset_path = tmp_path / "big.lance"
+    rows = 400_000
+    lance.write_dataset(
+        pa.table(
+            {
+                "id": pa.array(range(rows), pa.int64()),
+                "text": pa.array([f"value-{i}" for i in range(rows)], pa.string()),
+            }
+        ),
+        dataset_path,
+    )
+
+    def scan() -> None:
+        assert scan_lance(dataset_path).collect().height == rows
+
+    during_scan = _ticks_per_second(scan)
+    while_idle = _ticks_per_second(lambda: time.sleep(0.25))
+
+    share = during_scan / while_idle
+    assert share > 0.25, (
+        f"another thread ran at {share:.1%} of its idle rate during the scan "
+        f"({during_scan:.0f} vs {while_idle:.0f} ticks/s), so the scan held the GIL"
+    )
 
 
 @pytest.mark.needs_docker
