@@ -23,6 +23,11 @@ write), `sink_lance` (streaming write). A Rust `cdylib` built with maturin/PyO3 
 Building compiles the whole `lance` tree; the first build is slow. `cargo check` needs
 `--features pyo3` to cover `src/py.rs`, which is why `lint-rust` runs it twice.
 
+Two things that bite on a fresh machine: `lance-datafusion`'s build script needs a `protoc`
+on `PATH` despite the `protoc` feature (`apt-get install protobuf-compiler`), and a debug
+build links a ~2.7 GB cdylib, which `maturin develop` then copies, so expect to need several
+gigabytes free per build.
+
 ## Layout
 
 ```
@@ -114,6 +119,35 @@ accordingly. CI runs a dedicated release-build job so those paths are covered fo
 `PyDataFrameBatchReader::fill` re-acquires the GIL from a Tokio worker to pull the next
 dataframe. Removing the detach deadlocks.
 
+**No entry point may block on Tokio while holding the GIL.** Every `#[pymethods]` and
+`#[pyfunction]` that reaches `TOKIO_RUNTIME.block_on` wraps it in `py.detach`. Polars drives
+scans from streaming-engine worker threads, so holding the GIL across a read throttles the
+whole query. `test_scan_releases_the_gil` guards this by comparing another thread's progress
+during a scan against its progress while the main thread merely sleeps — an absolute tick
+threshold does not discriminate, because most of a scan's wall time is spent outside
+`next()`. Measured: ratio ~1.0 with the detach, ~0.02 without.
+
+**Errors map to Python builtins where one fits exactly.** `src/exc.rs` holds the table;
+`PolarsLanceError` derives from `RuntimeError`, which is what everything used to raise, so
+old `except RuntimeError` code still works. Two traps: Lance's *internal* `Error::Arrow`
+must stay on the base class, because a failure inside the caller's own query leaves a
+streaming write through it and reporting that as `ValueError` would be wrong; this crate's
+own argument checks travel in `LanceWriterError::Arrow` and are the ones that map to
+`ValueError`. Dual inheritance (`DatasetNotFoundError(PolarsLanceError, FileNotFoundError)`)
+was considered and rejected — it needs the Rust side to import the Python package at raise
+time for no real gain over plain builtins.
+
+**Blob columns are matched to schema fields by name.** Pairing positionally wrapped whichever
+column sat at the blob field's index; with two columns of the same type that swaps their
+contents and nothing downstream notices, since the types still line up.
+
+**`scan_lance` reads the manifest but no data.** It resolves a schema eagerly, which also
+pins the dataset version for the life of the frame — a later `collect` will not see a write
+that landed in between. That eagerness is deliberate: it is what lets a missing dataset raise
+`FileNotFoundError` at the call rather than a `ComputeError` wrapped by Polars at collect.
+`register_io_source` is passed `is_pure=True`, so two occurrences of one scan in a plan are
+evaluated once.
+
 ## Conventions
 
 - Rust comments explain *why*, referencing upstream issue numbers where behaviour is a
@@ -121,6 +155,7 @@ dataframe. Removing the detach deadlocks.
 - Tests carry a docstring or comment stating the failure they prevent.
 - Python is fully typed; `mypy` runs with `disallow_untyped_defs` over `python/` and `tests/`.
 - Public Python docstrings are numpydoc (pdoc renders them with `-d numpy`).
-- Errors: `LanceScannerError`/`LanceWriterError` wrap Lance/Arrow/Polars errors. Only the
-  Polars variant maps to a Polars exception; everything else becomes `RuntimeError`.
+- Errors: `LanceScannerError`/`LanceWriterError` wrap Lance/Arrow/Polars errors. The Polars
+  variant maps to a Polars exception, the Lance variant goes through `exc.rs`, and the Arrow
+  variant (this crate's own argument checks) becomes `ValueError`.
 - Cloud storage tests use testcontainers (MinIO, Azurite) and are marked `needs_docker`.
