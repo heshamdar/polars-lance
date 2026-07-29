@@ -73,6 +73,13 @@ out-of-bounds raises vs null), tz-aware timestamp literals, `is_in` containing n
 so `n_rows` is honoured in Python instead. See the `n_rows=n_rows if predicate is None`
 line in `scan_lance`.
 
+**Aggregation pushdown is impossible, not merely absent.** `register_io_source` calls the
+plugin with `(with_columns, predicate, n_rows, batch_size)` and nothing else, so an
+aggregate is indistinguishable from an ordinary read. Measured against Polars 1.40:
+`select(pl.len())` arrives as a single-column projection, `.count()` as a full scan
+(`with_columns=None`), `select(col.sum())` as a plain column read. Do not go looking for a
+hook; there isn't one. If Polars grows one, this is the note to revisit.
+
 **The Arrow bridge in `arrow.rs` is load-bearing and subtle.** arrow-rs and polars-arrow are
 distinct crates; conversion goes through the C data interface with `transmute` between the
 two crates' FFI structs. Two shapes cannot go through FFI and are rebuilt by hand:
