@@ -13,7 +13,11 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
-  "polars>=1.0.0",
+  # Not a guess at the oldest workable Polars: the extension links pyo3-polars, which
+  # carries its own copy of polars-rs, so the Python and Rust sides have to agree. This
+  # tracks the Polars that ships the polars-rs in `Cargo.toml`, and moves when that does.
+  # `sink_lance` also needs `LazyFrame.collect_batches`, added in 1.34.
+  "polars>=1.40",
 ]
 classifiers = [
   "Programming Language :: Python :: 3.10",
