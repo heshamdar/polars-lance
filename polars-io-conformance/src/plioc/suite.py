@@ -13,14 +13,11 @@ object can be used outside pytest -- by the report generator, for instance.
 
 from __future__ import annotations
 
-import importlib.util
-from dataclasses import replace
 from typing import Any
 
-import polars as pl
 import pytest
 
-from plioc import oracle
+from plioc import oracle, selection
 from plioc.corpus import all_cases, query_fixture
 from plioc.equality import Strictness
 from plioc.harness import Capabilities, IOHarness, is_failure
@@ -33,21 +30,6 @@ _CASE_IDS = sorted(_CASES)
 _QUERIES = all_queries()
 _QUERY_IDS = [q.id for q in _QUERIES]
 _FIXTURE = query_fixture()
-
-
-def _dtypes_of(dtype: Any) -> list[pl.DataType]:
-    """Flatten a dtype into itself and everything nested inside it.
-
-    Typed loosely because `Schema.items()` is annotated as yielding `DataType | DataTypeClass`,
-    and a nested `inner`/`field.dtype` is the same union again.
-    """
-    out: list[pl.DataType] = [dtype]
-    if isinstance(dtype, (pl.List, pl.Array)):
-        out += _dtypes_of(dtype.inner)
-    elif isinstance(dtype, pl.Struct):
-        for f in dtype.fields:
-            out += _dtypes_of(f.dtype)
-    return out
 
 
 def expect(caps: Capabilities, case_id: str, run: Any) -> None:
@@ -97,7 +79,7 @@ class ConformanceSuite:
         otherwise cost the entire query matrix, which is the part of the suite a plugin most needs.
         Queries that reference a dropped column skip individually.
         """
-        return _supported_columns(caps, _FIXTURE)
+        return selection.narrow(caps, _FIXTURE)
 
     @pytest.fixture
     def written_fixture(self, harness: IOHarness, fixture_case: CaseSpec) -> Any:
@@ -110,18 +92,14 @@ class ConformanceSuite:
             pytest.skip("slow case; set include_slow = True to run it")
 
     def _require_dtypes(self, caps: Capabilities, case: CaseSpec) -> None:
-        for name, dtype in case.schema().items():
-            for part in _dtypes_of(dtype):
-                if not caps.supports(part):
-                    pytest.skip(f"the harness does not claim {part} (column {name!r})")
+        missing = selection.unsupported(caps, case)
+        if missing:
+            pytest.skip(f"the harness does not claim {', '.join(sorted(set(missing)))}")
 
     def _require_columns(self, query: QuerySpec, case: CaseSpec) -> None:
-        referenced = set(query.projection or ()) | set(
-            query.predicate.columns() if query.predicate is not None else ()
-        )
-        missing = referenced - set(case.schema())
+        missing = selection.missing_columns(query, case)
         if missing:
-            pytest.skip(f"the fixture has no {sorted(missing)}: dtype not claimed")
+            pytest.skip(f"the fixture has no {missing}: dtype not claimed")
 
     # -- round-trip ------------------------------------------------------------------------
 
@@ -273,19 +251,6 @@ def _query(query_id: str) -> QuerySpec:
 
 
 def _skip_unrunnable(query: QuerySpec, case: CaseSpec, include_slow: bool) -> None:
-    if "slow" in query.tags and not include_slow:
-        pytest.skip("slow query; set include_slow = True to run it")
-    if "udf" in query.tags and importlib.util.find_spec("cloudpickle") is None:
-        # Polars serialises a UDF with cloudpickle to hand it to an IO plugin. Without it the
-        # query fails inside Polars, which is a missing optional dependency and not a
-        # conformance result either way.
-        pytest.skip("cloudpickle is not installed, so a UDF cannot reach an IO plugin")
-    if not oracle.is_runnable(query, case):
-        pytest.skip("Polars itself rejects this query, so there is no right answer to check")
-
-
-def _supported_columns(caps: Capabilities, case: CaseSpec) -> CaseSpec:
-    keep = tuple(
-        c for c in case.columns if all(caps.supports(part) for part in _dtypes_of(c.dtype))
-    )
-    return case if len(keep) == len(case.columns) else replace(case, columns=keep)
+    reason = selection.query_skip_reason(query, case, include_slow=include_slow)
+    if reason is not None:
+        pytest.skip(reason)

@@ -79,12 +79,21 @@ both connectives, and `harnesses/mutants.py::DropsResidual` exists to prove they
   caught a wrong `Enum`-loss declaration on this suite's own Parquet harness.
 - `Capabilities.dtypes` — dtypes you support. Cases outside the set skip rather than fail.
 
-`plioc.report` renders the matrix, with the reference harnesses beside your own so you can see at
-a glance whether a failure is yours or the format's:
+## The report
+
+`python -m plioc` runs every contract and writes a standalone HTML page:
 
 ```
-python -m plioc.report CAPABILITIES.md
+python -m plioc --html report.html --json report.json my.module:MyHarness
 ```
+
+The reference harnesses are always included as columns, so a failure is attributable at a glance:
+if Parquet and IPC lose it too, it is the format. Each failure carries the ~10-line spec that
+reproduces it, because a conformance failure nobody can re-run gets triaged into a backlog and
+forgotten. `--json` gives the same run as data, for diffing two commits.
+
+Exit status is 1 on an undeclared failure or a stale declaration, so this works as a CI gate
+without pytest. `plioc.report` alone still renders the round-trip matrix as markdown.
 
 ## How the corpus is generated
 
@@ -145,7 +154,11 @@ src/plioc/
   strategies.py  Hypothesis, over specs -- never over data
   codec.py       specs to text and back
   regressions/   committed counterexamples
-  report.py      the capability matrix
+  selection.py   which cases and queries apply to a harness (shared by both surfaces below)
+  run.py         running the suite outside pytest, as a value
+  html.py        that value as a standalone HTML report
+  report.py      the round-trip capability matrix, as markdown
+  __main__.py    `python -m plioc`
   suite.py       ConformanceSuite
 docs/api-findings.md   what Polars actually does, measured
 PLAN-REVIEW.md         what changed from the original design, and why

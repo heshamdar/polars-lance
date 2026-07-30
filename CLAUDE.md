@@ -21,6 +21,7 @@ write), `sink_lance` (streaming write). A Rust `cdylib` built with maturin/PyO3 
 | `just build-docs` | pdoc into `site/` |
 | `just test-conformance-self` | the conformance suite's own tests; needs no extension build |
 | `just test-conformance` | release build, then the conformance corpus against this plugin |
+| `just conformance-report` | release build, then `reports/conformance-report.html` |
 | `just capabilities` | render `CAPABILITIES.md` — this plugin beside parquet/IPC |
 | `just lint-conformance` | ruff + mypy over `polars-io-conformance/` |
 
@@ -206,6 +207,11 @@ What it found on its first run, all reproducible in under ten lines:
   type `_pli128`, which arrow-rs rejects outright.
 - **Three column names Lance cannot address**: the empty string, a name containing `.` (which
   Lance reads as struct nesting), and a name containing a backtick.
+
+`just conformance-report` renders a full run as a standalone HTML page: a summary, the reference
+formats as columns beside this plugin, every check grouped by contract, and for each failure the
+~10-line spec that reproduces it. It exits non-zero on an undeclared failure, so it doubles as a
+gate; CI uploads it as an artifact whether or not the tests passed.
 
 The pushdown *engagement* assertions are skipped here, loudly: `LanceHarness.probe()` returns
 `None` because nothing in `scan_lance` reports what it was handed. Threading a rows-read counter

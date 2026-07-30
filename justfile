@@ -27,8 +27,18 @@ test-conformance-self:
 test-conformance: develop-release
     uv run pytest tests/test_conformance.py
 
-# The capability matrix, with the reference formats beside this plugin so a failure attributes to
-# one or the other.
+# An HTML report of a full conformance run: every check, the declared limits, and the spec that
+# reproduces each failure. Exits non-zero on an undeclared failure, so it works as a gate on its
+# own. The reference formats are included as columns, which is what makes a failure attributable.
+conformance-report: develop-release
+    uv run python -m plioc \
+        --html reports/conformance-report.html \
+        --json reports/conformance-report.json \
+        --markdown reports/CAPABILITIES.md \
+        --title "polars-lance - IO plugin conformance" \
+        tests.conformance_harness:LanceHarness
+
+# Just the round-trip capability matrix, as markdown.
 capabilities: develop-release
     uv run python -m plioc.report CAPABILITIES.md tests.conformance_harness:LanceHarness
 

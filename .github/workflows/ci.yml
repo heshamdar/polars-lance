@@ -196,10 +196,15 @@ jobs:
       - name: Run Python tests against a release build
         run: just test-release
 
-      - name: Publish the capability matrix
-        run: uv run --no-project python -m plioc.report CAPABILITIES.md tests.conformance_harness:LanceHarness
+      # The readable output of a conformance run: every check, the declared limits, and the spec
+      # that reproduces each failure. Built even when the tests failed, since that is exactly
+      # when it is worth reading.
+      - name: Build the conformance report
+        if: always()
+        run: just conformance-report
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: capabilities
-          path: CAPABILITIES.md
+          name: conformance-report
+          path: reports/
