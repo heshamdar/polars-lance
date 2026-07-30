@@ -53,6 +53,9 @@ jobs:
       - name: Lint Python
         run: just lint-pyth
 
+      - name: Lint the conformance suite
+        run: just lint-conformance
+
   test-rust:
     name: Rust tests (${{ matrix.os }})
     needs: lint
@@ -83,6 +86,31 @@ jobs:
 
       - name: Run Rust tests
         run: just test-rust
+
+  # The conformance suite is a standalone package with its own tests: the generator's determinism
+  # and prefix-stability properties, the reference harnesses, and the mutation check that every
+  # deliberately-broken harness is caught by some case. None of it needs the extension, so it runs
+  # before the long builds.
+  test-conformance-self:
+    name: Conformance suite (self-tests)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - name: Run the conformance suite's own tests
+        run: just test-conformance-self
 
   test-python:
     name: Python tests (${{ matrix.os }}, py${{ matrix.python-version }})
@@ -167,3 +195,11 @@ jobs:
 
       - name: Run Python tests against a release build
         run: just test-release
+
+      - name: Publish the capability matrix
+        run: uv run --no-project python -m plioc.report CAPABILITIES.md tests.conformance_harness:LanceHarness
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: capabilities
+          path: CAPABILITIES.md

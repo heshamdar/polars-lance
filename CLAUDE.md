@@ -19,6 +19,10 @@ write), `sink_lance` (streaming write). A Rust `cdylib` built with maturin/PyO3 
 | `just lint-rust` | `cargo fmt --check`, `cargo check` with and without `pyo3` |
 | `just lint-pyth` | `ruff check`, `ruff format --check`, `mypy` |
 | `just build-docs` | pdoc into `site/` |
+| `just test-conformance-self` | the conformance suite's own tests; needs no extension build |
+| `just test-conformance` | release build, then the conformance corpus against this plugin |
+| `just capabilities` | render `CAPABILITIES.md` — this plugin beside parquet/IPC |
+| `just lint-conformance` | ruff + mypy over `polars-io-conformance/` |
 
 Building compiles the whole `lance` tree; the first build is slow. `cargo check` needs
 `--features pyo3` to cover `src/py.rs`, which is why `lint-rust` runs it twice.
@@ -45,6 +49,12 @@ python/polars_lance/
   _predicate.py     Polars predicate -> Lance SQL filter string
   _polars_lance.pyi type stubs for the extension module
 tests/                pytest; `utils.py` holds the shared Arrow fixtures
+  conformance_harness.py  the plioc harness + this plugin's capability declaration
+  test_conformance.py     runs the conformance corpus; skipped on a debug build
+polars-io-conformance/  a standalone generative conformance suite for *any* Polars IO plugin
+  src/plioc/            specs, generators, corpus, harness contract, oracle, mutants, report
+  PLAN-REVIEW.md        what changed from the design it was built to, and why
+  docs/api-findings.md  what register_io_source and the generator's three APIs actually do
 examples/compare_with_pyarrow.py  benchmark vs pl.scan_pyarrow_dataset
 ```
 
@@ -159,3 +169,45 @@ evaluated once.
   variant maps to a Polars exception, the Lance variant goes through `exc.rs`, and the Arrow
   variant (this crate's own argument checks) becomes `ValueError`.
 - Cloud storage tests use testcontainers (MinIO, Azurite) and are marked `needs_docker`.
+
+## The conformance suite
+
+`polars-io-conformance/` is a standalone package (import name `plioc`) that generates a
+conformance corpus from specs — no committed data files — and drives any IO plugin through it.
+It is wired to this one in `tests/conformance_harness.py`, which is also where what this plugin
+preserves is declared. Read its README before changing it; `PLAN-REVIEW.md` records the design
+decisions that are load-bearing rather than incidental.
+
+Two things about running it here:
+
+- **It needs a release build.** The corpus writes nullable nested columns as a matter of course,
+  which is exactly the data Lance's 2.1 encoder debug-asserts on (lance#8032, #8033), so
+  `tests/test_conformance.py` skips itself when `_polars_lance._debug_assertions` is set.
+- **Every entry in `KNOWN_FAILURES` is a strict xfail.** Fixing one of the bugs listed there
+  breaks the suite until the entry is deleted. That is deliberate: it is what stops the list
+  outliving the bugs.
+
+What it found on its first run, all reproducible in under ten lines:
+
+- **A signed-zero comparison translates to a subset.** `col == 0.0` is true for both `0.0` and
+  `-0.0` in Polars; the translated filter `(v = -0.0)` distinguishes them, so the pushed filter
+  matches *fewer* rows than the predicate and the missing ones never reach the batch-level
+  re-filter. This is the superset invariant above, violated. `_predicate.py` already refuses NaN
+  comparisons for the same reason; a zero literal needs the same treatment.
+- **`scan_lance` cannot read back an `Enum` column.** The write succeeds. `LanceReader.schema()`
+  then builds `pl.Enum(categories)` from a `Series` created by the extension's own copy of
+  polars-rs, and Python-side `Enum.__init__` calls `.dtype()` on it: `TypeError: 'String' object
+  is not callable`. `Categorical` round-trips fine.
+- **An `Array` column panics in the Arrow bridge below Polars 1.43** — "the offset of the new
+  Buffer cannot exceed the existing length", the same family as the sliced-struct-with-nulls
+  workaround already in `arrow.rs`. It round-trips on 1.43, so the declared `polars>=1.40` floor
+  is lower than what actually works.
+- **`Int128` never reaches Lance.** Polars exports it over the C data interface as the extension
+  type `_pli128`, which arrow-rs rejects outright.
+- **Three column names Lance cannot address**: the empty string, a name containing `.` (which
+  Lance reads as struct nesting), and a name containing a backtick.
+
+The pushdown *engagement* assertions are skipped here, loudly: `LanceHarness.probe()` returns
+`None` because nothing in `scan_lance` reports what it was handed. Threading a rows-read counter
+out of `LanceScanner` is what would turn those skips into real coverage — a plugin that ignores
+every pushed predicate and filters in Python passes the correctness suite completely.

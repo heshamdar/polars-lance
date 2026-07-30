@@ -32,6 +32,9 @@ urls = { Repository = "https://github.com/jorritsandbrink/polars-lance" }
 [dependency-groups]
 dev = [
   "maturin>=1.13.1",
+  # The generative IO-plugin conformance suite, developed in this repo as a standalone package
+  # so it can be pointed at any plugin. `tests/test_conformance.py` is the whole integration.
+  "polars-io-conformance",
   "pdoc>=16.0.0",
   "pylance>=9.0.0",
   "pyarrow>=14.0.0",
@@ -47,6 +50,9 @@ markers = ["needs_docker: marks tests that require a running Docker daemon"]
 filterwarnings = [
   "ignore:The @wait_container_is_ready decorator is deprecated:DeprecationWarning:testcontainers",
 ]
+
+[tool.uv.sources]
+polars-io-conformance = { path = "polars-io-conformance", editable = true }
 
 [tool.maturin]
 python-source = "python"
