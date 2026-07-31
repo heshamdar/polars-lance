@@ -13,8 +13,8 @@ from __future__ import annotations
 import platform
 import sys
 import time
-from functools import partial
 from collections.abc import Callable, Sequence
+from functools import partial
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -204,13 +204,30 @@ def run_harness(
             run.repros.setdefault(case.id, codec.dumps(case))
         _record(run, "fixpoint", case.id, tags, partial(oracle.check_fixpoint, harness, case))
 
-    if fixture.columns:
-        _run_schema_checks(harness, run, fixture)
-        _run_queries(harness, run, fixture, matrix, include_slow=include_slow)
-        _run_laws(harness, run, fixture)
-    else:
+    if not fixture.columns:
         _skip(run, "schema", "query/fixture", frozenset(), "no claimed dtype in the fixture")
+        return run
 
+    # Writing the fixture is the precondition for every query and every law, and it is a plugin
+    # operation like any other -- so it is reported, not raised. A harness that cannot write one
+    # of the fixture's ten columns would otherwise abort the whole run with a traceback, taking
+    # the results for every other harness in the report with it.
+    def write_fixture() -> None:
+        oracle.materialise(harness, fixture, "/queries")
+
+    check = _record(run, "schema", "query/fixture", frozenset({"schema"}), write_fixture)
+    if check.status is Status.FAIL:
+        run.repros.setdefault("query/fixture", codec.dumps(fixture))
+        reason = "the query fixture could not be written"
+        for query in matrix:
+            _skip(run, "query", query.id, query.tags, reason)
+            _skip(run, "engagement", query.id, query.tags, reason)
+        _skip(run, "law", "laws", frozenset({"law"}), reason)
+        return run
+
+    _run_schema_checks(harness, run, fixture)
+    _run_queries(harness, run, fixture, matrix, include_slow=include_slow)
+    _run_laws(harness, run, fixture)
     return run
 
 
@@ -224,7 +241,7 @@ def _run_schema_checks(harness: IOHarness, run: HarnessRun, fixture: CaseSpec) -
     )
 
     def schema_matches() -> None:
-        target = oracle.materialise(harness, fixture)
+        target = oracle.materialise(harness, fixture, "/schema")
         observed = dict(harness.scan(target).collect_schema())
         expected = dict(oracle.oracle_frame(harness, fixture).schema)
         if observed != expected:
@@ -325,7 +342,15 @@ def _run_laws(harness: IOHarness, run: HarnessRun, fixture: CaseSpec) -> None:
     if numeric is None:
         _skip(run, "law", "laws", frozenset({"law"}), "no numeric column in the fixture")
         return
-    target = oracle.materialise(harness, fixture, "/laws")
+    try:
+        target = oracle.materialise(harness, fixture, "/laws")
+    except BaseException as exc:  # noqa: BLE001 - reported, not raised; see run_harness
+        if not is_failure(exc):
+            raise
+        _skip(
+            run, "law", "laws", frozenset({"law"}), f"could not write the fixture: {_one_line(exc)}"
+        )
+        return
     predicate = Cmp(numeric, "gt", 0)
     other = Cmp(numeric, "lt", 1000)
     tags = frozenset({"law"})

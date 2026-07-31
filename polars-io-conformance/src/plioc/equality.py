@@ -188,12 +188,56 @@ def rechunked(df: pl.DataFrame) -> pl.DataFrame:
     return df.rechunk()
 
 
+#: Every integer dtype narrower than `Int64`, which is the set a format with a smaller vocabulary
+#: than Polars can widen.
+NARROW_INTS: tuple[type[pl.DataType], ...] = (
+    pl.Int8,
+    pl.Int16,
+    pl.Int32,
+    pl.UInt8,
+    pl.UInt16,
+    pl.UInt32,
+    pl.UInt64,
+)
+
+
 def widen_ints(df: pl.DataFrame) -> pl.DataFrame:
     """For a format with only 64-bit integers."""
-    signed = (pl.Int8, pl.Int16, pl.Int32)
-    unsigned = (pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64)
-    return df.with_columns(
+    casts = [
         pl.col(name).cast(pl.Int64)
         for name, dtype in df.schema.items()
-        if isinstance(dtype, signed + unsigned)
-    )
+        if isinstance(dtype, NARROW_INTS)
+    ]
+    return df.with_columns(casts) if casts else df
+
+
+def widen_ints_to(mapping: dict[pl.DataType, pl.DataType]) -> object:
+    """For a format with a narrower integer vocabulary than Polars.
+
+    Avro, for instance, has `int` and `long` and nothing else, so `Int8` comes back as `Int32` and
+    `UInt32` as `Int64` -- while `Int32` and `Int64` are kept exactly. Only the dtypes the mapping
+    names are touched: a default of "widen everything else to `Int64`" reads as a convenience and
+    is a trap, because it silently describes a loss the format does not have and turns the
+    round-trip assertion into a check that the *suite* is wrong in the same way.
+    """
+
+    def run(df: pl.DataFrame) -> pl.DataFrame:
+        casts = [
+            pl.col(name).cast(mapping[dtype])
+            for name, dtype in df.schema.items()
+            if dtype in mapping
+        ]
+        return df.with_columns(casts) if casts else df
+
+    return run
+
+
+def array_to_list(df: pl.DataFrame) -> pl.DataFrame:
+    """For a format with variable-length arrays only, which is most of them: the fixed width is
+    a Polars-side guarantee that nothing on disk records."""
+    casts = [
+        pl.col(name).cast(pl.List(dtype.inner))
+        for name, dtype in df.schema.items()
+        if isinstance(dtype, pl.Array)
+    ]
+    return df.with_columns(casts) if casts else df

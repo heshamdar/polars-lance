@@ -120,6 +120,15 @@ Four properties are asserted in CI, because each is a property fixture files can
 3. **Stream independence** — adding a column to a case does not perturb the others.
 4. **Scale-freedom** — the same spec runs at 3 rows and at 50 million, fully lazily.
 
+## Evidence that "any plugin" is not just a claim
+
+`examples/third_party.py` wires up three plugins this project did not write -- `polars-avro`
+(Rust), `polars-fastavro` (the same format through a Python bridge), and Delta Lake via
+`deltalake` -- in about fifteen lines each. Running them found four bugs in *this suite* (see
+PLAN-REVIEW.md, "What running it against somebody else's plugin changed") and a pile of real,
+attributable limits in them, including a writer that silently mangles a column name to fit the
+format's identifier rules and then cannot read the file back.
+
 ## The suite tests itself
 
 `MemoryHarness` is the identity and must pass everything at `METADATA`; a case it fails is the

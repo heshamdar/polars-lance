@@ -15,7 +15,15 @@ from typing import Any
 
 import polars as pl
 
-from plioc.gen.core import IDX, GenContext, Generator, NullPattern, nullify, row_index
+from plioc.gen.core import (
+    IDX,
+    IDX_DTYPE,
+    GenContext,
+    Generator,
+    NullPattern,
+    nullify,
+    row_index,
+)
 from plioc.gen.layout import Layout
 
 
@@ -43,7 +51,7 @@ class CaseSpec:
     n_rows: int = 1000
     seed: int = 0
     layout: Layout = field(default_factory=Layout)
-    #: Emit `__i` as a leading `UInt64` column, so a harness that does not preserve row order can
+    #: Emit `__i` as a leading `Int64` column, so a harness that does not preserve row order can
     #: still be compared after a deterministic sort. Cases testing schemas without an integer
     #: column turn it off and are only comparable below `Strictness.ROW_ORDER`.
     order_key: bool = True
@@ -77,7 +85,7 @@ class CaseSpec:
     def schema(self) -> pl.Schema:
         fields: list[tuple[str, pl.DataType]] = []
         if self.order_key:
-            fields.append((IDX, pl.UInt64()))
+            fields.append((IDX, IDX_DTYPE()))
         fields.extend((c.name, c.dtype) for c in self.columns)
         return pl.Schema(fields)
 

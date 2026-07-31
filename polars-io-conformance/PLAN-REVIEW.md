@@ -236,6 +236,46 @@ that builds the wrong dtype tests the wrong thing everywhere at once.
 
 ---
 
+## What running it against somebody else's plugin changed
+
+The suite was built against this repo's plugin and three reference formats. Pointing it at three
+plugins nobody here wrote -- `polars-avro`, `polars-fastavro`, `deltalake` -- moved four things,
+which is the argument for `examples/third_party.py` existing at all.
+
+### F1. The identity column was `UInt64`, and most formats have no unsigned 64-bit type
+
+`CaseSpec.order_key` emitted `__i` as `UInt64`. Avro has `int` and `long` and nothing unsigned;
+Delta's type system is Spark's and is signed-only. So *every case in the corpus* failed for both,
+on a column that is there to make comparison possible and carries no test value of its own.
+Parquet and IPC store `UInt64` happily, which is exactly why it survived to that point.
+
+`IDX_DTYPE` is `Int64`. Unsigned integers are still tested -- there is a `numeric/int/UInt64/*`
+family for that -- but the scaffolding no longer costs a format the whole run.
+
+### F2. A harness that cannot write the query fixture aborted the run
+
+`run_harness` wrapped every case in the failure classifier and then called `materialise` for the
+query fixture outside it. A plugin that cannot write one of the fixture's ten columns took down
+the whole report, including the results for every other harness in it. Writing the fixture is a
+plugin operation like any other and is now recorded, not raised.
+
+### F3. `widen_ints_to` defaulted to `Int64` for anything unmapped
+
+Convenience, and a trap: it described a widening the format does not perform, so the round-trip
+assertion started checking that the *suite* was wrong in the same way the plugin was. It now
+touches only the dtypes the mapping names.
+
+### F4. `Capabilities.dtypes` is keyed by dtype class, and some limits are finer than that
+
+`polars-fastavro` writes `Datetime(us)` and refuses `Datetime(ns)` and every tz-aware timestamp.
+That is not expressible in a set of dtype *classes*, so those cases are declared individually in
+`known_failures` instead. Left as is -- a matcher over dtype instances would be a second, subtler
+declaration language for one plugin's benefit -- but it is a real edge of the design.
+
+The stale-declaration ratchet also earned its keep immediately: the `polars-avro` name-mangling
+declaration was copied to `polars-fastavro`, where all sixteen entries reported as stale, because
+the pure-Python bridge round-trips every awkward name the Rust plugin mangles.
+
 ## What was kept exactly as written
 
 The parts of the plan that are load-bearing and correct, listed so a future reader does not

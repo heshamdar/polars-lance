@@ -17,6 +17,14 @@ import polars as pl
 #: Name of the row-index column every generated frame is built from.
 IDX = "__i"
 
+#: Dtype of the row index, and therefore of the identity column a case emits. `Int64`, not the
+#: obvious `UInt64`: several real formats -- Avro and Delta Lake among them -- have no unsigned
+#: 64-bit type at all, and an identity column they cannot store makes every case in the corpus
+#: fail for a reason that has nothing to do with what the case tests. Parquet and IPC carry
+#: `UInt64` happily, which is exactly why this went unnoticed until a third-party plugin ran.
+IDX_DTYPE = pl.Int64
+
+#: The mixer's working type. Unrelated to the index dtype -- the index is cast into it.
 U64 = pl.UInt64
 
 # splitmix64. Chosen over `Expr.hash` because its output is a documented, fixed function of the
@@ -29,7 +37,7 @@ _U64_MASK = (1 << 64) - 1
 
 def row_index(n: int) -> pl.LazyFrame:
     """A lazy frame of `n` rows carrying only the row index."""
-    return pl.LazyFrame().select(pl.int_range(0, n, dtype=U64).alias(IDX))
+    return pl.LazyFrame().select(pl.int_range(0, n, dtype=IDX_DTYPE).alias(IDX))
 
 
 def idx() -> pl.Expr:
@@ -112,7 +120,9 @@ class Generator(Protocol):
 
 def rnd(ctx: GenContext, draw: int = 0) -> pl.Expr:
     """A `UInt64` pseudo-random draw, one independent value per `(ctx, draw)`."""
-    return _splitmix64(idx() ^ pl.lit(splitmix64(ctx.key ^ (draw * _GOLDEN & _U64_MASK)), U64))
+    return _splitmix64(
+        idx().cast(U64) ^ pl.lit(splitmix64(ctx.key ^ (draw * _GOLDEN & _U64_MASK)), U64)
+    )
 
 
 def unit(ctx: GenContext, draw: int = 0) -> pl.Expr:
@@ -172,20 +182,20 @@ def null_mask(pattern: NullPattern, ctx: GenContext, draw: int = 900) -> pl.Expr
     if pattern is NullPattern.ALL:
         # Row-shaped rather than `pl.lit(True)`: a scalar mask makes the whole `when` scalar, and
         # a scalar branch is broadcast to one row instead of to none in a zero-row frame.
-        return i >= pl.lit(0, U64)
+        return i >= pl.lit(0, IDX_DTYPE)
     if pattern is NullPattern.SPARSE:
         return rnd(ctx, draw) % pl.lit(100, U64) < pl.lit(5, U64)
     if pattern is NullPattern.DENSE:
         return rnd(ctx, draw) % pl.lit(100, U64) < pl.lit(95, U64)
     if pattern is NullPattern.FIRST:
-        return i == pl.lit(0, U64)
+        return i == pl.lit(0, IDX_DTYPE)
     if pattern is NullPattern.LAST:
-        return i == pl.lit(max(ctx.n_rows - 1, 0), U64)
+        return i == pl.lit(max(ctx.n_rows - 1, 0), IDX_DTYPE)
     if pattern is NullPattern.ALTERNATING:
-        return i % pl.lit(2, U64) == pl.lit(0, U64)
+        return i % pl.lit(2, IDX_DTYPE) == pl.lit(0, IDX_DTYPE)
     if pattern is NullPattern.BOUNDARY:
-        pos = i % pl.lit(BOUNDARY_BLOCK, U64)
-        return (pos == pl.lit(0, U64)) | (pos == pl.lit(BOUNDARY_BLOCK - 1, U64))
+        pos = i % pl.lit(BOUNDARY_BLOCK, IDX_DTYPE)
+        return (pos == pl.lit(0, IDX_DTYPE)) | (pos == pl.lit(BOUNDARY_BLOCK - 1, IDX_DTYPE))
     raise AssertionError(f"unhandled null pattern: {pattern}")
 
 
